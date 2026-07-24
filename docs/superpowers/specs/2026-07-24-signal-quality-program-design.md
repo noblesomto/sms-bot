@@ -231,5 +231,7 @@ Priority tuning candidates, in order:
 
 ## 7. Changelog / cutovers
 
-- *(unreleased)* Phase 1 cutover date: ____ (fill at deploy; stats before
-  this date use zone-mid entries and close-based outcomes)
+- **2026-07-24 08:56 UTC — Phase 1 deployed to production.** Stats before
+  this instant use zone-mid entries and close-based outcomes; rows after it
+  use market-at-alert entries and wick-swept outcomes. Cross-era PnL
+  comparisons are invalid.
