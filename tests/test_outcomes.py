@@ -1,4 +1,8 @@
-from scheduler import _resolve_outcome, _sweep_outcome
+from datetime import datetime, timedelta, timezone
+
+import pandas as pd
+
+from scheduler import _resolve_outcome, _sweep_outcome, _sweep_window
 
 T1, T2, SL = 4088.75, 4112.5, 4021.57
 
@@ -73,3 +77,39 @@ def test_sweep_no_touch_returns_none():
 
 def test_sweep_empty_candles_returns_none():
     assert _sweep_outcome("LONG", "ACTIVE", [], target1=T1, target2=T2, invalidation=SL) is None
+
+
+def _make_1h_df():
+    # Candle opens on the hour: N-2, N-1, N (still forming), each 1h wide.
+    opens = [
+        datetime(2026, 7, 24, 10, 0, tzinfo=timezone.utc),
+        datetime(2026, 7, 24, 11, 0, tzinfo=timezone.utc),
+        datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc),
+    ]
+    return pd.DataFrame({"datetime": opens, "high": [1, 2, 3], "low": [1, 2, 3]})
+
+
+def test_sweep_window_includes_straddling_candle():
+    # start_ts is 20 minutes into candle N (opened 12:00) — that candle's
+    # close (13:00) is still after start_ts, so it must be included even
+    # though its open (12:00) is before start_ts.
+    df = _make_1h_df()
+    start_ts = datetime(2026, 7, 24, 12, 20, tzinfo=timezone.utc)
+    window = _sweep_window(df, start_ts, "1h")
+    assert list(window["datetime"]) == [datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)]
+
+
+def test_sweep_window_excludes_fully_closed_candles():
+    # Candles N-2 (10:00) and N-1 (11:00) both closed (11:00, 12:00) before
+    # start_ts (12:20) and must be excluded; only candle N remains.
+    df = _make_1h_df()
+    start_ts = datetime(2026, 7, 24, 12, 20, tzinfo=timezone.utc)
+    window = _sweep_window(df, start_ts, "1h")
+    assert datetime(2026, 7, 24, 10, 0, tzinfo=timezone.utc) not in list(window["datetime"])
+    assert datetime(2026, 7, 24, 11, 0, tzinfo=timezone.utc) not in list(window["datetime"])
+
+
+def test_sweep_window_none_start_ts_returns_full_df():
+    df = _make_1h_df()
+    window = _sweep_window(df, None, "1h")
+    assert len(window) == len(df)

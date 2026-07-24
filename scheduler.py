@@ -32,6 +32,10 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 # How long a signal stays ACTIVE before being auto-expired (no TP/SL hit)
 TF_EXPIRY_HOURS = {"5min": 4, "15min": 12, "1h": 48}
 
+# Candle duration per timeframe, used to determine when a bar has fully closed
+_TF_DELTA = {"5min": timedelta(minutes=5), "15min": timedelta(minutes=15),
+             "1h": timedelta(hours=1), "4h": timedelta(hours=4)}
+
 
 async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
     """
@@ -565,7 +569,7 @@ def _sweep_outcome(direction: str, status: str, candles, target1, target2, inval
     `status` is evaluated against every candle unchanged (it does not switch
     to TP1_HIT mid-sweep even once a TP1 candle is found): this keeps the
     simpler stop-at-first-outcome contract — a TP1 hit ends the sweep just
-    like a terminal SL/TP2 would, and the next 5-min check resumes scanning
+    like a terminal SL/TP2 would, and the next hourly check resumes scanning
     from `hit_at` onward in TP1_HIT state (spec 2026-07-24 §2.5, "choose the
     simpler stop-at-first-outcome approach").
 
@@ -576,6 +580,16 @@ def _sweep_outcome(direction: str, status: str, candles, target1, target2, inval
         if outcome:
             return outcome
     return None
+
+
+def _sweep_window(df, start_ts, timeframe):
+    """Candles still open at or opened after start_ts. Compares candle CLOSE
+    time (open + timeframe) so the bar forming when the signal/TP1 fired is
+    included — its remaining wicks are the likeliest to hit the stop."""
+    if start_ts is None:
+        return df
+    delta = _TF_DELTA.get(timeframe, timedelta(hours=1))
+    return df[df["datetime"] + delta > start_ts]
 
 
 async def check_signal_status():
@@ -639,7 +653,7 @@ async def check_signal_status():
                 if start_ts is not None and start_ts.tzinfo is None:
                     start_ts = start_ts.replace(tzinfo=timezone.utc)
 
-                window_df = df[df["datetime"] > start_ts] if start_ts is not None else df
+                window_df = _sweep_window(df, start_ts, sig.timeframe)
                 if window_df.empty:
                     # Signal created only seconds ago — no candle qualifies yet;
                     # fall back to the latest bar as before.
