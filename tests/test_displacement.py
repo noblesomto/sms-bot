@@ -42,3 +42,14 @@ def test_ob_at_end_of_data_fails_open():
     # no candles after OB yet → no displacement evidence → reject
     rows = FLAT + [(100.5, 100.6, 99.6, 99.8)]
     assert not _has_displacement(_df(rows), 15, "BULLISH")
+
+def test_full_pipeline_finds_displaced_ob():
+    # Integration guard: the module self-test's realistic fixture must clear
+    # the full pipeline (identify_swings -> detect_bos -> find_order_blocks ->
+    # validate_obs) and yield at least one displacement-gated OB. This pins
+    # down regressions where the fixture's ATR/impulse balance drifts back
+    # to "0 OBs found" (the bug this task fixed).
+    from core.order_blocks import test_order_blocks
+    obs = test_order_blocks()
+    assert len(obs) >= 1
+    assert all(ob["direction"] in {"BULLISH", "BEARISH"} for ob in obs)

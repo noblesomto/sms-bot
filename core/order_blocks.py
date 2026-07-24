@@ -2,8 +2,18 @@ import logging
 from typing import Optional
 import pandas as pd
 
-from config import settings
-from core.precision import price_precision
+try:
+    from config import settings
+    from core.precision import price_precision
+except ImportError:
+    # Allow direct script invocation (./venv/bin/python3 core/order_blocks.py):
+    # the script's own directory is on sys.path, not the project root, so the
+    # top-level `config` and `core` packages aren't importable without this.
+    import sys
+    import pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+    from config import settings
+    from core.precision import price_precision
 
 logger = logging.getLogger(__name__)
 
@@ -157,42 +167,53 @@ def test_order_blocks():
     """Standalone test — simplified OB + displacement demonstration.
     Note: test_displacement.py provides comprehensive gate testing.
     This self-test verifies basic OB structure still works with the gate.
+
+    Fixture design (realistic continuous OHLC — each candle opens at/near the
+    prior close, wicks contained, no unrealistic open/close gaps):
+      idx 0-13:  a quiet base establishing ATR(14) baseline (~0.2-0.3 range/candle)
+      idx 14:    a clear bearish candle — the Order Block candidate
+      idx 15-17: a genuinely impulsive rally (~4-5x the base ATR per candle)
+                 that both demonstrates displacement off the OB and forms the
+                 swing high (idx 17)
+      idx 18-21: a minor consolidation with lower highs than idx 17, needed so
+                 identify_swings(lookback=3) confirms idx 17 as a swing high
+      idx 22:    breakout candle that closes back above the idx-17 swing high,
+                 triggering the BULLISH BOS
+      idx 23-25: trailing candles for context
     """
-    # Pattern: Uptrend → Bearish OB → Strong impulsive recovery → Trend
-    # The impulsive recovery after the OB demonstrates displacement.
-    # The detailed gate logic is tested in test_displacement.py (5 test cases).
     rows = [
-        # Rising trend with pullback to create OB candidate (indices 0-8)
-        (100, 102, 100, 101),        # idx 0: up
-        (101, 103, 101, 102),        # idx 1: up (swing high potential)
-        (102, 104, 101, 102.5),      # idx 2: up
-        (102.5, 104.5, 102, 103),    # idx 3: up (swing high potential)
-        (103, 105, 102.5, 103.5),    # idx 4: up
-        (103.5, 105.5, 103, 104),    # idx 5: up (swing high potential)
-        (104, 106, 103.5, 104.5),    # idx 6: up
-        (104.5, 106.5, 104, 105),    # idx 7: up (swing high = 106.5)
-        (105, 105, 103, 104),        # idx 8: pullback, bullish doji
-        # Bearish OB and impulsive recovery (indices 9-11)
-        (104, 104.5, 102.5, 102.8),  # idx 9: bearish (open 104 > close 102.8)
-        (102.8, 107, 102.8, 106.5),  # idx 10: strong impulse
-        (106.5, 109, 106.5, 108.5),  # idx 11: strong impulse
-        # More data for structure detection and BOS confirmation (indices 12-29)
-        (108.5, 110, 108, 109),
-        (109, 111, 108.5, 110),
-        (110, 112, 109.5, 111),
-        (111, 113, 110.5, 112),
-        (112, 114, 111.5, 113),
-        (113, 115, 112.5, 114),
-        (114, 116, 113.5, 115),
-        (115, 117, 114.5, 116),
-        (116, 118, 115.5, 117),
-        (117, 119, 116.5, 118),
-        (118, 120, 117.5, 119),
-        (119, 121, 118.5, 120),
-        (120, 122, 119.5, 121),
-        (121, 123, 120.5, 122),
-        (122, 124, 121.5, 123),
-        (123, 125, 122.5, 124),
+        # Quiet base (indices 0-13): modest, continuous candles
+        (100.0, 100.1, 99.9, 100.0),
+        (100.0, 100.25, 99.9, 100.15),
+        (100.15, 100.25, 99.95, 100.05),
+        (100.05, 100.3, 99.95, 100.2),
+        (100.2, 100.3, 100.0, 100.1),
+        (100.1, 100.35, 100.0, 100.25),
+        (100.25, 100.35, 100.05, 100.15),
+        (100.15, 100.4, 100.05, 100.3),
+        (100.3, 100.4, 100.1, 100.2),
+        (100.2, 100.45, 100.1, 100.35),
+        (100.35, 100.45, 100.15, 100.25),
+        (100.25, 100.5, 100.15, 100.4),
+        (100.4, 100.5, 100.2, 100.3),
+        (100.3, 100.55, 100.2, 100.45),
+        # idx 14: Order Block candidate — clear bearish candle
+        (100.45, 100.5, 100.1, 100.15),
+        # idx 15-17: impulsive breakout rally (creates the swing high at idx 17)
+        (100.15, 101.25, 100.05, 101.15),
+        (101.15, 102.35, 101.05, 102.25),
+        (102.25, 103.25, 102.15, 103.15),
+        # idx 18-21: minor consolidation, lower highs than idx 17
+        (103.15, 103.18, 102.92, 102.95),
+        (102.95, 103.08, 102.92, 103.05),
+        (103.05, 103.08, 102.87, 102.9),
+        (102.9, 102.98, 102.87, 102.95),
+        # idx 22: breakout candle — closes above the idx-17 swing high -> BOS
+        (102.95, 104.06, 102.85, 103.96),
+        # idx 23-25: trailing context
+        (103.96, 104.36, 103.86, 104.26),
+        (104.26, 104.56, 104.16, 104.46),
+        (104.46, 104.56, 104.26, 104.36),
     ]
     highs = [r[1] for r in rows]
     lows = [r[2] for r in rows]
