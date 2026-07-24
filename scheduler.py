@@ -572,97 +572,105 @@ async def check_signal_status():
         resolved = 0
 
         for sig in watchlist:
-            entry = sig.entry_price or ((sig.entry_zone_low + sig.entry_zone_high) / 2)
+            try:
+                entry = sig.entry_price or ((sig.entry_zone_low + sig.entry_zone_high) / 2)
 
-            # ── Expiry check (only ACTIVE signals expire; TP1_HIT never expires) ──
-            if sig.status == "ACTIVE":
-                expiry_hours = TF_EXPIRY_HOURS.get(sig.timeframe, 48)
-                if sig.created_at:
-                    created = sig.created_at if sig.created_at.tzinfo else sig.created_at.replace(tzinfo=timezone.utc)
-                    if (now - created) > timedelta(hours=expiry_hours):
-                        sig.status = "EXPIRED"
-                        sig.hit_target = "EXPIRED"
-                        sig.hit_at = now
-                        resolved += 1
-                        df_exp = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 5)
-                        cur = unrealized = None
-                        if df_exp is not None and not df_exp.empty:
-                            cur = float(df_exp["close"].iloc[-1])
-                            diff = (cur - entry) if sig.direction == "LONG" else (entry - cur)
-                            unrealized = _calc_pips(sig.pair, diff)
-                        await send_tp_notification(format_expiry_alert(
-                            pair=sig.pair, direction=sig.direction,
-                            timeframe=sig.timeframe, entry=entry,
-                            current_price=cur, unrealized_pips=unrealized,
-                            expiry_hours=expiry_hours,
-                        ))
-                        logger.info(f"[{sig.pair}/{sig.timeframe}] expired after {expiry_hours}h — user notified")
-                        continue
+                # ── Expiry check (only ACTIVE signals expire; TP1_HIT never expires) ──
+                if sig.status == "ACTIVE":
+                    expiry_hours = TF_EXPIRY_HOURS.get(sig.timeframe, 48)
+                    if sig.created_at:
+                        created = sig.created_at if sig.created_at.tzinfo else sig.created_at.replace(tzinfo=timezone.utc)
+                        if (now - created) > timedelta(hours=expiry_hours):
+                            sig.status = "EXPIRED"
+                            sig.hit_target = "EXPIRED"
+                            sig.hit_at = now
+                            resolved += 1
+                            df_exp = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 5)
+                            cur = unrealized = None
+                            if df_exp is not None and not df_exp.empty:
+                                cur = float(df_exp["close"].iloc[-1])
+                                diff = (cur - entry) if sig.direction == "LONG" else (entry - cur)
+                                unrealized = _calc_pips(sig.pair, diff)
+                            await send_tp_notification(format_expiry_alert(
+                                pair=sig.pair, direction=sig.direction,
+                                timeframe=sig.timeframe, entry=entry,
+                                current_price=cur, unrealized_pips=unrealized,
+                                expiry_hours=expiry_hours,
+                            ))
+                            logger.info(f"[{sig.pair}/{sig.timeframe}] expired after {expiry_hours}h — user notified")
+                            continue
 
-            df = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 50)
-            if df is None or df.empty:
-                continue
-            last = df.iloc[-1]
-            high, low = float(last["high"]), float(last["low"])
+                df = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 50)
+                if df is None or df.empty:
+                    continue
+                last = df.iloc[-1]
+                high, low = float(last["high"]), float(last["low"])
 
-            outcome = _resolve_outcome(
-                sig.direction, sig.status, high, low,
-                sig.target1, sig.target2, sig.invalidation,
-            )
-            if not outcome:
-                continue
-            hit_target, hit_price = outcome
-
-            price_diff = (hit_price - entry) if sig.direction == "LONG" else (entry - hit_price)
-            pnl = _calc_pips(sig.pair, price_diff)
-            resolved += 1
-
-            if hit_target == "TP1":
-                # Intermediate win — keep watching for TP2
-                sig.status = "TP1_HIT"
-                sig.hit_target = "TP1"
-                sig.hit_at = now
-                sig.pnl_pips = pnl
-                msg = format_tp_hit_alert(
-                    pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
-                    tp_level="TP1", hit_price=hit_price, entry=entry, pnl_pips=pnl,
-                    target2=sig.target2,
+                outcome = _resolve_outcome(
+                    sig.direction, sig.status, high, low,
+                    sig.target1, sig.target2, sig.invalidation,
                 )
-                await send_tp_notification(msg)
-                logger.info(f"[{sig.pair}/{sig.timeframe}] TP1 hit @ {hit_price} — watching for TP2")
+                if not outcome:
+                    continue
+                hit_target, hit_price = outcome
 
-            elif hit_target == "TP2":
-                # If TP1 was already banked, blend both legs 50/50 instead of
-                # discarding the TP1 profit in favor of the TP2-leg pnl alone.
-                came_via_tp1 = sig.status == "TP1_HIT"
-                sig.status = "HIT"
-                sig.hit_target = "TP2"
-                sig.hit_at = now
-                sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1) if came_via_tp1 else pnl
-                msg = format_tp_hit_alert(
-                    pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
-                    tp_level="TP2", hit_price=hit_price, entry=entry, pnl_pips=pnl,
+                price_diff = (hit_price - entry) if sig.direction == "LONG" else (entry - hit_price)
+                pnl = _calc_pips(sig.pair, price_diff)
+                resolved += 1
+
+                if hit_target == "TP1":
+                    # Intermediate win — keep watching for TP2
+                    sig.status = "TP1_HIT"
+                    sig.hit_target = "TP1"
+                    sig.hit_at = now
+                    sig.pnl_pips = pnl
+                    msg = format_tp_hit_alert(
+                        pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
+                        tp_level="TP1", hit_price=hit_price, entry=entry, pnl_pips=pnl,
+                        target2=sig.target2,
+                    )
+                    await send_tp_notification(msg)
+                    logger.info(f"[{sig.pair}/{sig.timeframe}] TP1 hit @ {hit_price} — watching for TP2")
+
+                elif hit_target == "TP2":
+                    # If TP1 was already banked, blend both legs 50/50 instead of
+                    # discarding the TP1 profit in favor of the TP2-leg pnl alone.
+                    came_via_tp1 = sig.status == "TP1_HIT"
+                    sig.status = "HIT"
+                    sig.hit_target = "TP2"
+                    sig.hit_at = now
+                    sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1) if came_via_tp1 else pnl
+                    msg = format_tp_hit_alert(
+                        pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
+                        tp_level="TP2", hit_price=hit_price, entry=entry, pnl_pips=pnl,
+                    )
+                    await send_tp_notification(msg)
+                    logger.info(f"[{sig.pair}/{sig.timeframe}] TP2 hit @ {hit_price} — full target reached")
+
+                elif hit_target == "SL":
+                    sig.status = "INVALIDATED"
+                    sig.hit_target = "SL"
+                    sig.hit_at = now
+                    sig.pnl_pips = pnl
+                    logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit @ {hit_price}")
+
+                elif hit_target == "SL_AFTER_TP1":
+                    # TP1 was already banked — blend the banked TP1 leg with the
+                    # SL leg 50/50 and record it as a distinct partial-win outcome
+                    # instead of overwriting pnl_pips with the SL loss alone and
+                    # counting it as a full INVALIDATED loss.
+                    sig.status = "PARTIAL_WIN"
+                    sig.hit_target = "SL_AFTER_TP1"
+                    sig.hit_at = now
+                    sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1)
+                    logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit after TP1 — partial win banked")
+
+            except Exception as e:
+                logger.error(
+                    f"[{sig.pair}/{sig.timeframe}] Error tracking signal id={sig.id}: {e}",
+                    exc_info=True,
                 )
-                await send_tp_notification(msg)
-                logger.info(f"[{sig.pair}/{sig.timeframe}] TP2 hit @ {hit_price} — full target reached")
-
-            elif hit_target == "SL":
-                sig.status = "INVALIDATED"
-                sig.hit_target = "SL"
-                sig.hit_at = now
-                sig.pnl_pips = pnl
-                logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit @ {hit_price}")
-
-            elif hit_target == "SL_AFTER_TP1":
-                # TP1 was already banked — blend the banked TP1 leg with the
-                # SL leg 50/50 and record it as a distinct partial-win outcome
-                # instead of overwriting pnl_pips with the SL loss alone and
-                # counting it as a full INVALIDATED loss.
-                sig.status = "PARTIAL_WIN"
-                sig.hit_target = "SL_AFTER_TP1"
-                sig.hit_at = now
-                sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1)
-                logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit after TP1 — partial win banked")
+                continue
 
         db.commit()
         logger.info(
