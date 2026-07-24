@@ -1,0 +1,7 @@
+[Unit]
+Description=SMC Bot health watchdog (one-shot check)
+
+[Service]
+Type=oneshot
+WorkingDirectory=/root/smc_bot
+ExecStart=/root/smc_bot/venv/bin/python3 /root/smc_bot/scripts/watchdog.py

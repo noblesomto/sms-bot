@@ -1,0 +1,18 @@
+[Unit]
+Description=SMC ICT Chart Scanner Bot
+After=network-online.target
+Wants=network-online.target
+OnFailure=smc-bot-failure-alert.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/smc_bot
+ExecStart=/root/smc_bot/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/root/smc_bot/bot.log
+StandardError=append:/root/smc_bot/bot.log
+EnvironmentFile=/root/smc_bot/.env
+
+[Install]
+WantedBy=multi-user.target

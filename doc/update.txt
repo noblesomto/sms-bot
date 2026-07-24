@@ -1,0 +1,499 @@
+You are an expert Python developer and technical analyst specializing in Wyckoff Market Cycle theory. Build a production-ready Wyckoff Phase Detection module that integrates seamlessly into an existing SMC/ICT trading bot.
+
+## CONTEXT
+This module will be added to an existing SMC bot with this structure:
+smc_bot/
+├── core/
+│   ├── data_feed.py         # get_candles(pair, timeframe) → pandas DataFrame
+│   ├── structure.py         # get_market_structure(df) → bias, swings, BOS, CHoCH
+│   ├── liquidity.py         # get_liquidity_levels(df) → EQH, EQL, PDH, PDL
+│   └── confluence.py        # score_signal(factors) → int score
+
+The new Wyckoff module must plug into confluence.py scoring system and deliver phase context in Telegram alerts.
+
+## MODULE LOCATION
+smc_bot/core/wyckoff.py
+smc_bot/core/wyckoff_events.py
+smc_bot/core/wyckoff_volume.py
+smc_bot/tests/test_wyckoff.py
+
+## WYCKOFF THEORY IMPLEMENTATION
+
+### THE FOUR PHASES TO DETECT
+
+#### PHASE 1: ACCUMULATION
+Wyckoff Accumulation has 5 sub-phases (A through E):
+
+**Phase A — Stopping the downtrend:**
+- PS (Preliminary Support): first sign of demand after prolonged downtrend
+  - Detection: high volume bullish candle after 10+ candles of downtrend
+  - Volume must be highest in last 20 candles
+- SC (Selling Climax): panic selling exhaustion
+  - Detection: wide-range bearish candle with volume spike (2x average)
+  - Followed immediately by AR (Automatic Rally)
+- AR (Automatic Rally): first bounce from SC
+  - Detection: sharp bullish move of at least 3% from SC low
+  - Establishes top of the trading range
+- ST (Secondary Test): retest of SC area
+  - Detection: price returns to SC area on LOWER volume than SC
+  - Must hold above SC low to confirm accumulation
+
+**Phase B — Building the cause:**
+- Price oscillates between SC low (support) and AR high (resistance)
+- Multiple tests of both boundaries
+- Detection: at least 3 oscillations within the range
+- Volume generally decreasing on tests
+- Identify: SOW (Sign of Weakness) — minor breaks below support on low volume
+- Identify: UA (Upthrust Action) — minor breaks above resistance on low volume
+
+**Phase C — The Spring:**
+- Spring: price breaks BELOW SC support briefly then reverses sharply back inside range
+  - Detection: wick or close below range low followed by close back above
+  - Volume on spring can be high or low (both valid)
+  - Low volume spring = stronger (no supply)
+  - This is the MOST IMPORTANT signal — institutional stop hunt before markup
+- Test of Spring: retest of spring low on significantly lower volume
+  - Detection: price approaches spring low, volume drops 50%+ vs spring candle
+
+**Phase D — Markup beginning:**
+- LPS (Last Point of Support): higher lows forming after spring
+  - Detection: each pullback holds higher than previous low
+- SOS (Sign of Strength): strong bullish move with increased volume
+  - Detection: breaks above AR high with volume expansion
+- BU (Back Up): retest of broken resistance (now support) — classic break and retest
+  - Detection: price returns to former AR high level on low volume
+
+**Phase E — Markup:**
+- Price leaves the trading range with sustained upward movement
+- Detection: close above AR high + 2 consecutive higher highs outside range
+
+---
+
+#### PHASE 2: DISTRIBUTION
+Mirror of accumulation — detect institutional selling:
+
+**Phase A — Stopping the uptrend:**
+- PSY (Preliminary Supply): first sign of supply after prolonged uptrend
+  - Detection: high volume bearish candle after 10+ candles of uptrend
+- BC (Buying Climax): euphoric buying exhaustion
+  - Detection: wide-range bullish candle with volume spike (2x average)
+- AR (Automatic Reaction): first drop from BC
+  - Detection: sharp bearish move of at least 3% from BC high
+- ST (Secondary Test): retest of BC area on lower volume
+
+**Phase B — Building the cause:**
+- Price oscillates between AR low and BC high
+- UT (Upthrust): break above BC high on low volume — false breakout
+- SOW (Sign of Weakness): sharp drop within range on high volume
+
+**Phase C — UTAD:**
+- UTAD (Upthrust After Distribution): false breakout above BC high
+  - Detection: close above range high followed by close back inside range within 3 candles
+  - Volume spike on UTAD = strong distribution signal
+  - This is the mirror of the Spring
+
+**Phase D — Markdown beginning:**
+- LPSY (Last Point of Supply): lower highs forming after UTAD
+- SOW (Sign of Weakness): breaks below AR low with volume expansion
+- Falls through former support levels
+
+**Phase E — Markdown:**
+- Sustained downward movement outside the range
+
+---
+
+#### PHASE 3: RE-ACCUMULATION
+- Occurs mid-trend during markup phase
+- Smaller consolidation pattern (range is 30-50% of initial accumulation range)
+- Same sub-events as accumulation but compressed
+- Detection: consolidation after 15%+ uptrend, spring occurs, then trend resumes
+- Tag as: RE-ACCUMULATION
+
+#### PHASE 4: RE-DISTRIBUTION
+- Occurs mid-trend during markdown phase
+- Mirror of re-accumulation
+- Tag as: RE-DISTRIBUTION
+
+---
+
+## VOLUME ANALYSIS MODULE (wyckoff_volume.py)
+
+### Volume Spread Analysis (VSA):
+Implement these VSA signals:
+
+**Effort vs Result:**
+- High effort, high result = healthy trend (high volume + wide spread candle)
+- High effort, low result = absorption (high volume + narrow spread = institutions absorbing)
+- Low effort, high result = no resistance (low volume markup = easy move ahead)
+- Low effort, low result = no interest (ignore these candles)
+
+**Functions:**
+```python
+def classify_candle_effort(candle, avg_volume, avg_spread):
+    """
+    Returns: HIGH_EFFORT_HIGH_RESULT | HIGH_EFFORT_LOW_RESULT | 
+             LOW_EFFORT_HIGH_RESULT | LOW_EFFORT_LOW_RESULT
+    spread = abs(candle.high - candle.low)
+    effort = candle.volume relative to 20-period average
+    result = spread relative to 20-period average spread
+    """
+
+def detect_volume_climax(df, lookback=20):
+    """
+    Volume climax = volume > 2x 20-period average
+    Returns list of climax candles with type: BUYING_CLIMAX | SELLING_CLIMAX
+    based on candle direction
+    """
+
+def detect_no_supply(df):
+    """
+    No supply = down candle with volume below 20-period average
+    Bullish signal in accumulation context
+    Returns candle indices where no supply occurs
+    """
+
+def detect_no_demand(df):
+    """
+    No demand = up candle with volume below 20-period average
+    Bearish signal in distribution context
+    """
+
+def get_volume_profile(df, num_bins=20):
+    """
+    Calculate Point of Control (POC) — price level with highest volume
+    Calculate Value Area High (VAH) and Value Area Low (VAL) — 70% of volume
+    Returns: {poc: float, vah: float, val: float}
+    """
+```
+
+---
+
+## TRADING RANGE DETECTION (wyckoff.py)
+
+### Range Identification:
+```python
+def identify_trading_range(df, min_candles=15):
+    """
+    A trading range is a consolidation where:
+    - Price oscillates between two boundaries for at least min_candles
+    - Range high = highest high in the consolidation
+    - Range low = lowest low in the consolidation
+    - Range must be preceded by a trend (up or down) of at least 10 candles
+    
+    Returns:
+    {
+        range_high: float,
+        range_low: float,
+        range_midpoint: float,
+        start_index: int,
+        candle_count: int,
+        preceding_trend: BULLISH | BEARISH,
+        oscillation_count: int
+    }
+    """
+
+def detect_spring(df, trading_range):
+    """
+    Spring = price closes below range_low then reverses above within 1-3 candles
+    
+    Spring strength:
+    - Strong spring: low volume on break, closes well above range_low
+    - Weak spring: high volume on break (supply present)
+    
+    Returns:
+    {
+        detected: bool,
+        spring_index: int,
+        spring_low: float,
+        spring_volume: LOW | HIGH,
+        strength: STRONG | WEAK,
+        tested: bool,
+        test_index: int (if tested)
+    }
+    """
+
+def detect_utad(df, trading_range):
+    """
+    UTAD = price closes above range_high then reverses below within 1-3 candles
+    Mirror of spring for distribution
+    
+    Returns same structure as detect_spring
+    """
+
+def classify_phase(df, trading_range, spring_result, utad_result, structure):
+    """
+    Determine current Wyckoff phase:
+    
+    Logic:
+    - If preceding trend = BEARISH → potential ACCUMULATION
+      - No spring yet → Phase A or B
+      - Spring detected, not tested → Phase C
+      - Spring tested, SOS forming → Phase D
+      - Price outside range (above) → Phase E
+    
+    - If preceding trend = BULLISH → potential DISTRIBUTION
+      - No UTAD yet → Phase A or B
+      - UTAD detected → Phase C
+      - LPSY forming → Phase D
+      - Price outside range (below) → Phase E
+    
+    Returns:
+    {
+        phase_type: ACCUMULATION | DISTRIBUTION | RE-ACCUMULATION | RE-DISTRIBUTION,
+        sub_phase: A | B | C | D | E,
+        key_event: SPRING | SPRING_TESTED | SOS | LPS | UTAD | LPSY | SOW | BU,
+        phase_confidence: LOW | MEDIUM | HIGH,
+        bias: BULLISH | BEARISH | NEUTRAL,
+        description: str  # human readable phase explanation
+    }
+    """
+```
+
+---
+
+## INTEGRATION WITH SMC BOT
+
+### Confluence Scoring Integration:
+Add these factors to existing confluence.py scorer:
+
+| Wyckoff Factor | Points |
+|---|---|
+| Phase C Spring confirmed (accumulation) | +3 |
+| Spring tested on low volume | +2 |
+| Phase D LPS (higher low after spring) | +2 |
+| SOS (break above range with volume) | +1 |
+| Phase C UTAD confirmed (distribution) | +3 |
+| UTAD tested | +2 |
+| Phase D LPSY forming | +2 |
+| No Supply candle at OB | +1 |
+| No Demand candle at OB | +1 |
+| Volume climax at key level | +1 |
+| POC aligns with OB/FVG zone | +1 |
+
+### SMC + Wyckoff Synergy Rules:
+Implement these cross-module validation rules:
+
+1. **Spring + OB confluence:**
+   - If Spring occurs AT or NEAR a Bullish OB → ultra high conviction long
+   - Score boost: +2 additional points
+
+2. **UTAD + Bearish OB confluence:**
+   - If UTAD occurs AT or NEAR a Bearish OB → ultra high conviction short
+   - Score boost: +2 additional points
+
+3. **Liquidity sweep = Spring/UTAD:**
+   - If SMC liquidity sweep (EQL swept) coincides with Wyckoff Spring → confirm both
+   - These are the same institutional event described differently
+
+4. **CHoCH = SOS/SOW:**
+   - SMC Change of Character on LTF during Wyckoff Phase D = highest conviction entry
+   - Tag the signal: WYCKOFF_D_CHOCH_CONFLUENCE
+
+5. **POC as magnet:**
+   - If price is between VAL and POC in accumulation → price likely to reach POC (target)
+   - If price is between VAH and POC in distribution → price likely to reach POC (target)
+   - Add POC to target list in alert
+
+---
+
+## ALERT ENHANCEMENT (formatter.py update)
+
+Update Telegram alert format to include Wyckoff context:
+🟢 LONG SIGNAL — XAUUSD
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📊 Timeframe: 4H | Session: London Open
+
+⚡ Confluence Score: 9/10
+📈 WYCKOFF CONTEXT:
+
+Phase: Accumulation — Phase C
+Event: Spring Confirmed (Low Volume)
+Key Level: Spring Low @ 2298.40
+Volume: No Supply present
+POC: 2318.00 | VAH: 2328.00 | VAL: 2301.00
+Narrative: Institutions swept sell-side
+
+liquidity, absorbed supply at Spring low.
+
+Markup phase imminent.
+
+✅ SMC CONFLUENCE:
+
+Bullish OB: 2301.00 – 2305.00
+FVG: 2303.00 – 2307.00
+Sell-side liquidity swept
+CHoCH confirmed = SOS alignment
+London Kill Zone active
+Discount zone (below 50% EQ)
+
+📍 Entry Zone: 2301.00 – 2305.00
+
+🎯 Target 1: 2318.00 (POC)
+
+🎯 Target 2: 2328.00 (VAH / Range High)
+
+🎯 Target 3: 2355.00 (EQH)
+
+🛑 Invalidation: Close below 2298.40 (Spring Low)
+📖 Bias: BULLISH | Wyckoff + SMC aligned
+
+⏰ 2024-01-15 08:32 UTC
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+
+---
+
+## CHART ENHANCEMENT (plotter.py update)
+
+Add to existing Plotly chart:
+- Shade the trading range with light grey background
+- Mark SC/BC with a triangle marker labeled "SC" or "BC"
+- Mark AR high and low with dashed horizontal lines
+- Mark Spring/UTAD with a star marker (⭐) and label
+- Show volume bars colored by VSA classification:
+  - Green = High Effort High Result (bullish)
+  - Red = High Effort Low Result (absorption — warning)
+  - Yellow = Low Effort High Result (no resistance)
+  - Grey = Low Effort Low Result (ignore)
+- Draw POC as a thick purple horizontal line
+- Shade VAH-VAL area with light purple transparency
+- Annotate current Wyckoff phase in top-right corner of chart
+
+---
+
+## PHASE HISTORY TRACKER
+
+### New DB table: wyckoff_phases
+```sql
+CREATE TABLE wyckoff_phases (
+    id INTEGER PRIMARY KEY,
+    pair TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    phase_type TEXT NOT NULL,
+    sub_phase TEXT NOT NULL,
+    key_event TEXT,
+    range_high REAL,
+    range_low REAL,
+    spring_low REAL,
+    utad_high REAL,
+    poc REAL,
+    vah REAL,
+    val REAL,
+    confidence TEXT,
+    bias TEXT,
+    detected_at DATETIME,
+    resolved_at DATETIME,
+    outcome TEXT
+);
+```
+
+Track phase outcomes:
+- When Phase E begins, close the phase record
+- Record outcome: MARKUP_FOLLOWED | MARKDOWN_FOLLOWED | FAILED
+- Use this history to calculate phase detection accuracy over time
+
+---
+
+## WYCKOFF DASHBOARD API ROUTE
+
+Add to existing FastAPI routes:
+
+GET /wyckoff/{pair}
+Returns:
+```json
+{
+  "pair": "XAUUSD",
+  "timeframes": {
+    "1h": {
+      "phase": "ACCUMULATION",
+      "sub_phase": "C",
+      "key_event": "SPRING_CONFIRMED",
+      "confidence": "HIGH",
+      "bias": "BULLISH",
+      "range_high": 2335.00,
+      "range_low": 2298.00,
+      "spring_low": 2295.40,
+      "poc": 2318.00,
+      "description": "Spring confirmed at OB. Markup imminent."
+    },
+    "4h": {
+      "phase": "ACCUMULATION",
+      "sub_phase": "B",
+      "confidence": "MEDIUM",
+      "bias": "BULLISH"
+    }
+  },
+  "htf_ltf_aligned": true,
+  "overall_bias": "BULLISH"
+}
+```
+
+GET /wyckoff/history/{pair}
+- Returns last 20 detected phases with outcomes
+
+---
+
+## TESTING MODULE (test_wyckoff.py)
+
+Create comprehensive tests with synthetic OHLCV data:
+
+```python
+def test_accumulation_spring_detection():
+    """Generate synthetic accumulation schematic data and verify spring is detected"""
+
+def test_distribution_utad_detection():
+    """Generate synthetic distribution schematic data and verify UTAD detected"""
+
+def test_volume_climax_detection():
+    """Generate candles with volume spike and verify climax detection"""
+
+def test_no_supply_detection():
+    """Generate down candle with low volume and verify no supply signal"""
+
+def test_phase_classification_full_cycle():
+    """Run through complete A-E accumulation cycle and verify each phase classified"""
+
+def test_smc_wyckoff_confluence():
+    """Verify that Spring at OB returns correct boosted confluence score"""
+
+def test_trading_range_identification():
+    """Generate 30-candle consolidation and verify range identified correctly"""
+
+def run_all_tests():
+    """Run all tests and print pass/fail summary"""
+```
+
+---
+
+## IMPLEMENTATION RULES
+
+1. All Wyckoff logic must include detailed docstrings explaining the theory behind each detection
+2. Phase detection must run on both 1H and 4H timeframes simultaneously
+3. HTF (4H/Daily) Wyckoff phase provides narrative context — LTF (1H) provides entry timing
+4. Never fire a Wyckoff signal in isolation — always requires minimum 1 SMC factor to confirm
+5. Spring/UTAD detection has a 3-candle confirmation window — do not alert on the spring candle itself, wait for the close back inside the range
+6. Volume is required for VSA — if Twelve Data does not return volume for a pair (some forex pairs), gracefully degrade VSA scoring and note in alert: "Volume data unavailable — VSA skipped"
+7. Trading range minimum width: 1% of price (avoid micro-consolidations)
+8. Phase confidence levels:
+   - HIGH: Spring/UTAD confirmed + tested + SOS/SOW present
+   - MEDIUM: Spring/UTAD confirmed but not yet tested
+   - LOW: Phase A/B only — accumulation/distribution suspected
+9. Only HIGH and MEDIUM confidence phases contribute to confluence score
+10. All new code must follow the same patterns as existing smc_bot modules
+11. Add wyckoff_phase context to every signal record in the signals table (add columns: wyckoff_phase, wyckoff_event, wyckoff_confidence)
+12. Run test_wyckoff.py after build and fix any failures before finishing
+
+## DELIVERABLES
+Build files in this order:
+1. wyckoff_volume.py
+2. wyckoff_events.py
+3. wyckoff.py
+4. Update confluence.py (add wyckoff scoring)
+5. Update formatter.py (add wyckoff alert section)
+6. Update plotter.py (add wyckoff chart elements)
+7. Update db/models.py (add wyckoff_phases table + signal columns)
+8. Update api/routes.py (add wyckoff endpoints)
+9. test_wyckoff.py
+10. Update README.md with Wyckoff module documentation

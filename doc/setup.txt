@@ -1,0 +1,343 @@
+You are an expert Python developer specializing in algorithmic trading systems and Smart Money Concepts (SMC/ICT) technical analysis. Build a production-ready SMC/ICT chart scanning bot with the following complete specification.
+
+## PROJECT OVERVIEW
+A Python-based trading bot that continuously scans XAUUSD and other forex pairs for SMC/ICT patterns, scores confluence, and delivers structured alerts via Telegram. Runs 24/7 on a Contabo VPS (Ubuntu).
+
+## TECH STACK
+- Python 3.11+
+- FastAPI (REST API + WebSocket status endpoint)
+- Twelve Data API (OHLCV candlestick data)
+- APScheduler (scheduled scanning jobs)
+- pandas + numpy (data processing)
+- python-telegram-bot (alert delivery)
+- SQLite + SQLAlchemy (signal logging and deduplication)
+- Plotly (chart image generation with zones marked)
+- python-dotenv (environment config)
+- Uvicorn (ASGI server)
+
+## PROJECT STRUCTURE
+smc_bot/
+
+├── main.py                  # FastAPI app entry point
+
+├── scheduler.py             # APScheduler scan jobs
+
+├── config.py                # Settings from .env
+
+├── .env                     # API keys and config
+
+├── requirements.txt
+
+├── db/
+
+│   ├── models.py            # SQLAlchemy models
+
+│   └── database.py          # DB connection
+
+├── core/
+
+│   ├── data_feed.py         # Twelve Data OHLCV fetcher
+
+│   ├── structure.py         # BOS/CHoCH detection
+
+│   ├── order_blocks.py      # OB detection and validation
+
+│   ├── fvg.py               # Fair Value Gap scanner
+
+│   ├── liquidity.py         # EQH/EQL, PDH/PDL mapping
+
+│   ├── sessions.py          # Kill zone timing logic
+
+│   ├── confluence.py        # Multi-factor scorer
+
+│   └── premium_discount.py  # Fibonacci 50% range zones
+
+├── alerts/
+
+│   ├── telegram_bot.py      # Telegram alert sender
+
+│   └── formatter.py         # Alert message formatter
+
+├── charts/
+
+│   └── plotter.py           # Plotly chart image with zones
+
+└── api/
+
+└── routes.py            # FastAPI status/health routes
+
+## ENVIRONMENT VARIABLES (.env)
+TWELVE_DATA_API_KEY=your_key_here
+
+TELEGRAM_BOT_TOKEN=your_token_here
+
+TELEGRAM_CHAT_ID=your_chat_id_here
+
+SCAN_INTERVAL_MINUTES=15
+
+PAIRS=XAUUSD,EURUSD,GBPUSD,USDJPY
+
+TIMEFRAMES=1h,4h,1day
+
+HTF_TIMEFRAME=1day
+
+LTF_TIMEFRAME=1h
+
+MIN_CONFLUENCE_SCORE=3
+
+DB_URL=sqlite:///smc_bot.db
+
+## CORE DETECTION MODULES
+
+### 1. data_feed.py
+- Fetch OHLCV candles from Twelve Data REST API
+- Support multiple pairs and timeframes
+- Cache last 200 candles per pair/timeframe
+- Return pandas DataFrame with columns: open, high, low, close, volume, datetime
+- Handle API rate limits gracefully with retry logic (exponential backoff)
+- Function: get_candles(pair, timeframe, outputsize=200)
+
+### 2. structure.py — Market Structure
+Implement the following with exact SMC logic:
+
+**Swing Detection:**
+- identify_swings(df, lookback=5): detect swing highs and lows using rolling window
+- A swing high = candle high is highest in lookback candles on both sides
+- A swing low = candle low is lowest in lookback candles on both sides
+
+**BOS (Break of Structure):**
+- Bullish BOS: price closes above the last confirmed swing high
+- Bearish BOS: price closes below the last confirmed swing low
+- Tag the candle index and price level where BOS occurred
+
+**CHoCH (Change of Character):**
+- In a downtrend: bullish CHoCH = first BOS to the upside
+- In an uptrend: bearish CHoCH = first BOS to the downside
+- Distinguish CHoCH from continuation BOS
+
+**Trend State:**
+- Return current bias: BULLISH, BEARISH, or RANGING
+- Based on sequence of HH/HL (bullish) or LH/LL (bearish)
+
+### 3. order_blocks.py — Order Block Detection
+**Bullish OB:**
+- Last bearish (red) candle before a strong bullish impulse that caused a BOS
+- Valid OB = price has not returned to mitigate it yet
+- Store: OB high, OB low, OB midpoint, candle index, creation time
+
+**Bearish OB:**
+- Last bullish (green) candle before a strong bearish impulse that caused a BOS
+- Valid OB = price has not returned to mitigate it yet
+
+**OB Validation:**
+- Mark OB as mitigated when price closes through the 50% level of the OB
+- Remove mitigated OBs from active list
+- Keep last 5 unmitigated OBs per direction
+
+**Breaker Block:**
+- An OB that has been mitigated and price has broken through
+- Flip its bias (bullish OB becomes bearish breaker and vice versa)
+
+### 4. fvg.py — Fair Value Gap Scanner
+**Bullish FVG:**
+- Candle[i-1].high < Candle[i+1].low = gap between them
+- Gap must be at least 0.1% of price to be significant
+
+**Bearish FVG:**
+- Candle[i-1].low > Candle[i+1].high
+
+**FVG Status:**
+- Fresh: price has not entered the gap
+- Partially filled: price entered but did not close through
+- Filled: price closed through — invalidate
+
+**Inverse FVG:**
+- A filled FVG that now acts as support/resistance
+
+### 5. liquidity.py — Liquidity Mapping
+**Equal Highs/Lows (EQH/EQL):**
+- Scan for 2+ swing highs within 0.05% of each other = EQH (buy-side liquidity)
+- Scan for 2+ swing lows within 0.05% of each other = EQL (sell-side liquidity)
+
+**Previous Day/Week Highs and Lows:**
+- PDH, PDL: previous daily candle high and low
+- PWH, PWL: previous weekly candle high and low
+- These are prime liquidity targets
+
+**Liquidity Sweep Detection:**
+- Price wicks above EQH/PDH then closes back below = buy-side liquidity swept
+- Price wicks below EQL/PDL then closes back above = sell-side liquidity swept
+- A sweep followed by reversal is a high-probability signal
+
+### 6. sessions.py — Kill Zone Timing
+Define ICT kill zones in UTC:
+- London Open KZ: 07:00–09:00 UTC
+- New York Open KZ: 13:00–15:00 UTC
+- London Close KZ: 11:00–12:00 UTC
+- Asian Range: 00:00–05:00 UTC (range definition, not entry)
+
+Functions:
+- is_in_kill_zone(): returns True/False + zone name
+- get_current_session(): returns ASIAN, LONDON, NEW_YORK, OFF
+- Signals generated outside kill zones get lower confluence score
+
+### 7. premium_discount.py — Premium/Discount Zones
+- Identify the most recent major swing high and swing low (HTF)
+- Calculate 50% equilibrium (EQ) level
+- Price above EQ = Premium zone (look for sells)
+- Price below EQ = Discount zone (look for buys)
+- Add Fibonacci levels: 0.705 (OTE entry zone), 0.79, 0.886
+- Tag each signal with PREMIUM, DISCOUNT, or EQUILIBRIUM
+
+### 8. confluence.py — Multi-Factor Scorer
+Score each potential signal from 0–10 based on:
+
+| Factor | Points |
+|--------|--------|
+| HTF bias aligns with LTF signal direction | +2 |
+| Price at valid unmitigated OB | +2 |
+| FVG present in same zone | +1 |
+| Liquidity swept before entry | +2 |
+| In kill zone | +1 |
+| In premium/discount zone (correct side) | +1 |
+| CHoCH confirmed on LTF | +1 |
+
+- MIN_CONFLUENCE_SCORE from .env (default 3) = minimum to send alert
+- Return score, signal direction (LONG/SHORT), and list of active factors
+
+## ALERT SYSTEM
+
+### telegram_bot.py
+- Use python-telegram-bot library
+- Send text alerts + chart image in same message
+- Rate limit: max 1 alert per pair per 30 minutes (deduplication via SQLite)
+- Function: send_alert(pair, signal_data, chart_image_path)
+
+### formatter.py
+Format Telegram alert message as:
+🟢 LONG SIGNAL — XAUUSD
+
+━━━━━━━━━━━━━━━━━━━━
+
+📊 Timeframe: 1H | Session: London Open
+
+⚡ Confluence Score: 7/10
+✅ Factors:
+
+HTF Daily bias: BULLISH
+Price at Bullish OB (2318.40 – 2321.80)
+FVG present in zone
+Sell-side liquidity swept
+In London Kill Zone
+Discount zone (below 50% EQ)
+CHoCH confirmed on 15M
+
+📍 Entry Zone: 2318.40 – 2321.80
+
+🎯 Target 1: 2338.00 (PDH)
+
+🎯 Target 2: 2355.00 (EQH)
+
+🛑 Invalidation: Close below 2314.00 (OB low)
+⏰ 2024-01-15 08:32 UTC
+
+━━━━━━━━━━━━━━━━━━━━
+
+For SHORT signals use 🔴
+
+### Target and Invalidation Calculation:
+- Target 1: nearest liquidity level in signal direction (EQH for longs, EQL for shorts)
+- Target 2: PDH/PDL or PWH/PWL
+- Invalidation: close beyond OB low (for longs) or OB high (for shorts)
+
+## CHART GENERATION (plotter.py)
+Using Plotly:
+- Candlestick chart of last 100 candles on LTF
+- Draw OB zones as colored rectangles (green=bullish, red=bearish)
+- Draw FVG zones as blue shaded areas
+- Mark EQH/EQL as horizontal dashed lines
+- Mark PDH/PDL as orange horizontal lines
+- Mark BOS/CHoCH with arrows and labels
+- Mark current signal entry zone with a highlighted box
+- Save as PNG to /tmp/chart_{pair}_{timestamp}.png
+- Delete chart images older than 1 hour to save disk space
+
+## DATABASE (SQLite)
+
+### signals table:
+- id, pair, timeframe, direction, confluence_score, entry_zone_high,
+  entry_zone_low, target1, target2, invalidation, factors_json,
+  created_at, alerted_at, status (ACTIVE/INVALIDATED/HIT)
+
+### scans table:
+- id, pair, timeframe, scanned_at, candles_fetched, signals_found, error
+
+## SCHEDULER (scheduler.py)
+Using APScheduler:
+- Every SCAN_INTERVAL_MINUTES: run full scan on all PAIRS x TIMEFRAMES
+- Every 1 hour: check active signals for invalidation or target hits
+- Every 24 hours: cleanup old chart images and filled FVGs/mitigated OBs
+- Log all scan results to scans table
+
+## FASTAPI ROUTES (api/routes.py)
+- GET /health — returns bot status, last scan time, active signals count
+- GET /signals — returns last 20 signals as JSON
+- GET /signals/{pair} — returns signals for specific pair
+- GET /scan/trigger — manually trigger a scan immediately
+- WebSocket /ws/status — streams real-time scan updates
+
+## MAIN.PY
+- Initialize FastAPI app
+- Connect to SQLite on startup
+- Start APScheduler on startup
+- Include API routes
+- Run with uvicorn on port 8000
+
+## REQUIREMENTS.TXT
+Include exact versions for:
+fastapi, uvicorn, apscheduler, pandas, numpy, requests,
+python-telegram-bot, sqlalchemy, plotly, kaleido,
+python-dotenv, aiohttp
+
+## DEPLOYMENT
+Create a systemd service file: smc_bot.service
+[Unit]
+
+Description=SMC ICT Chart Scanner Bot
+
+After=network.target
+[Service]
+
+User=ubuntu
+
+WorkingDirectory=/home/ubuntu/smc_bot
+
+ExecStart=/home/ubuntu/smc_bot/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+
+Restart=always
+
+RestartSec=10
+
+EnvironmentFile=/home/ubuntu/smc_bot/.env
+[Install]
+
+WantedBy=multi-user.target
+
+Also create:
+- setup.sh: creates venv, installs requirements, sets up systemd service
+- README.md: full setup instructions including Twelve Data API key setup,
+  Telegram bot creation via BotFather, and VPS deployment steps
+
+## IMPLEMENTATION RULES
+1. Every detection function must include docstrings explaining the SMC logic
+2. All price comparisons must account for instrument pip precision (XAUUSD = 2 decimals)
+3. Use UTC timestamps everywhere — no local time
+4. Every module must have a standalone test function that runs on sample OHLCV data
+5. Log all errors to console with timestamp — never silently fail
+6. If Twelve Data API is unavailable, retry 3 times then skip that pair for this scan cycle
+7. OB and FVG zones must never overlap in the alert — consolidate if they do
+8. The bot must handle weekends gracefully (forex market closed — pause scanning)
+9. All monetary values stored as float with 2 decimal places
+10. Git-init the project with a proper .gitignore excluding .env and __pycache__
+
+Build the complete project now, file by file, starting with requirements.txt, then .env.example, then core modules in dependency order, then alerts, then API, then main.py, then deployment files.

@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SMC/ICT Scanner — Dashboard</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #30363d;
+    --green:    #26a69a;
+    --red:      #ef5350;
+    --gold:     #ffd700;
+    --blue:     #29b6f6;
+    --text:     #c9d1d9;
+    --muted:    #8b949e;
+    --font: 'Segoe UI', system-ui, sans-serif;
+  }
+
+  body { background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 24px; background: var(--surface);
+    border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 18px; font-weight: 600; color: var(--gold); letter-spacing: .5px; }
+  #live-badge {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--muted);
+  }
+  #live-dot {
+    width: 8px; height: 8px; border-radius: 50%; background: var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
+
+  /* ── Stat cards ── */
+  .cards { display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; margin-bottom: 20px; }
+  @media(max-width:1100px){ .cards{grid-template-columns:repeat(3,1fr)} }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; text-align: center;
+  }
+  .card-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
+  .card-value { font-size: 28px; font-weight: 700; }
+  .card-value.green { color: var(--green); }
+  .card-value.red   { color: var(--red); }
+  .card-value.gold  { color: var(--gold); }
+  .card-value.blue  { color: var(--blue); }
+
+  /* ── Chart grid ── */
+  .charts-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+  @media(max-width:900px){ .charts-2{grid-template-columns:1fr} }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px;
+  }
+  .panel-title {
+    font-size: 13px; font-weight: 600; color: var(--gold);
+    margin-bottom: 12px; text-transform: uppercase; letter-spacing: .6px;
+  }
+
+  /* ── Factor table ── */
+  .factor-table { width: 100%; border-collapse: collapse; }
+  .factor-table th {
+    text-align: left; font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .6px;
+    padding: 6px 10px; border-bottom: 1px solid var(--border);
+  }
+  .factor-table td { padding: 7px 10px; border-bottom: 1px solid #21262d; font-size: 13px; }
+  .factor-table tr:last-child td { border-bottom: none; }
+  .factor-table tr:hover td { background: #1c2128; }
+
+  .wr-bar { height: 6px; background: #21262d; border-radius: 3px; margin-top: 4px; }
+  .wr-fill { height: 100%; border-radius: 3px; }
+
+  /* ── Signals table ── */
+  .table-wrap { overflow-x: auto; }
+  table.signals { width: 100%; border-collapse: collapse; white-space: nowrap; }
+  table.signals th {
+    text-align: left; font-size: 11px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .6px;
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; background: var(--surface);
+  }
+  table.signals td { padding: 8px 12px; border-bottom: 1px solid #21262d; font-size: 12px; }
+  table.signals tr:last-child td { border-bottom: none; }
+  table.signals tr:hover td { background: #1c2128; }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 11px; font-weight: 600;
+  }
+  .badge-long   { background: rgba(38,166,154,.2); color: var(--green); }
+  .badge-short  { background: rgba(239,83,80,.2);  color: var(--red); }
+  .badge-active  { background: rgba(41,182,246,.2);  color: var(--blue); }
+  .badge-hit     { background: rgba(38,166,154,.2);  color: var(--green); }
+  .badge-tp1     { background: rgba(255,193,7,.2);   color: #ffc107; }
+  .badge-partial { background: rgba(255,193,7,.2);   color: #ffc107; }
+  .badge-inv     { background: rgba(239,83,80,.2);   color: var(--red); }
+  .badge-expired { background: rgba(139,148,158,.2); color: #8b949e; }
+
+  .pip-pos { color: var(--green); font-weight: 600; }
+  .pip-neg { color: var(--red);   font-weight: 600; }
+
+  .empty { text-align: center; color: var(--muted); padding: 40px; }
+
+  #refresh-timer { font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>⚡ SMC/ICT Scanner Dashboard</h1>
+  <div id="live-badge">
+    <span id="live-dot"></span>
+    <span id="last-updated">Loading…</span>
+    &nbsp;|&nbsp;
+    <span id="refresh-timer">Refreshing in 60s</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── Stat Cards ── -->
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Total Signals</div>
+      <div class="card-value blue" id="c-total">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Active</div>
+      <div class="card-value gold" id="c-active">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Wins (TP hit)</div>
+      <div class="card-value green" id="c-wins">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Partial Wins (TP1→SL)</div>
+      <div class="card-value" id="c-partial" style="color:#ffc107">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Losses (SL hit)</div>
+      <div class="card-value red" id="c-losses">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Win Rate</div>
+      <div class="card-value gold" id="c-winrate">—</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Total Pips</div>
+      <div class="card-value" id="c-pips">—</div>
+    </div>
+  </div>
+
+  <!-- ── Charts Row 1 ── -->
+  <div class="charts-2">
+    <div class="panel">
+      <div class="panel-title">Win Rate by Pair</div>
+      <div id="chart-pair" style="height:220px"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Win Rate by Timeframe</div>
+      <div id="chart-tf" style="height:220px"></div>
+    </div>
+  </div>
+
+  <!-- ── Charts Row 2 ── -->
+  <div class="charts-2">
+    <div class="panel">
+      <div class="panel-title">Equity Curve (Cumulative Pips)</div>
+      <div id="chart-equity" style="height:240px"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Factor Win Rate</div>
+      <div id="factor-body" style="max-height:240px;overflow-y:auto">
+        <div class="empty">No resolved signals yet</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Signals Table ── -->
+  <div class="panel">
+    <div class="panel-title">Recent Signals</div>
+    <div class="table-wrap">
+      <table class="signals">
+        <thead>
+          <tr>
+            <th>#</th><th>Pair</th><th>TF</th><th>Dir</th><th>Score</th>
+            <th>Entry</th><th>TP1</th><th>TP2</th><th>SL</th>
+            <th>Status</th><th>Hit</th><th>PnL (pips)</th><th>Opened</th><th>Closed</th>
+          </tr>
+        </thead>
+        <tbody id="signals-body">
+          <tr><td colspan="14" class="empty">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const PLOTLY_CFG  = {displayModeBar: false, responsive: true};
+const PLOTLY_DARK = {
+  plot_bgcolor:  '#161b22',
+  paper_bgcolor: '#161b22',
+  font:  {color: '#c9d1d9', size: 11},
+  margin:{l:50, r:20, t:10, b:40},
+  xaxis: {gridcolor:'#21262d', zerolinecolor:'#30363d'},
+  yaxis: {gridcolor:'#21262d', zerolinecolor:'#30363d'},
+};
+
+let countdown = 60;
+let timer;
+
+async function fetchStats() {
+  try {
+    const res = await fetch('/api/stats');
+    const data = await res.json();
+    render(data);
+    document.getElementById('last-updated').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+  } catch(e) {
+    console.error('Stats fetch failed', e);
+  }
+}
+
+function render(d) {
+  const ov = d.overview;
+
+  // Cards
+  set('c-total',   ov.total);
+  set('c-active',  ov.active);
+  set('c-wins',    ov.wins);
+  set('c-partial', ov.partial_wins);
+  set('c-losses',  ov.losses);
+  set('c-winrate', ov.completed > 0 ? ov.win_rate + '%' : '—');
+
+  const pipsEl = document.getElementById('c-pips');
+  pipsEl.textContent = ov.total_pips >= 0 ? '+' + ov.total_pips : ov.total_pips;
+  pipsEl.className = 'card-value ' + (ov.total_pips >= 0 ? 'green' : 'red');
+
+  // Pair chart
+  renderBarChart('chart-pair', d.by_pair, 'pair', 'pair');
+
+  // Timeframe chart
+  renderBarChart('chart-tf', d.by_timeframe, 'timeframe', 'timeframe');
+
+  // Equity curve
+  renderEquity(d.equity_curve);
+
+  // Factor table
+  renderFactors(d.factors);
+
+  // Signals table
+  renderSignals(d.recent_signals);
+}
+
+function renderBarChart(id, rows, labelKey, title) {
+  if (!rows || rows.length === 0) {
+    Plotly.purge(id);
+    document.getElementById(id).innerHTML = '<div class="empty">No data yet</div>';
+    return;
+  }
+  const labels = rows.map(r => r[labelKey]);
+  const wrs    = rows.map(r => r.win_rate);
+  const pips   = rows.map(r => r.pips);
+  const colors = wrs.map(w => w >= 50 ? '#26a69a' : '#ef5350');
+
+  Plotly.react(id, [
+    {
+      type: 'bar', x: labels, y: wrs, name: 'Win Rate %',
+      marker: {color: colors}, text: wrs.map(w => w + '%'),
+      textposition: 'outside',
+    }
+  ], {
+    ...PLOTLY_DARK,
+    yaxis: {...PLOTLY_DARK.yaxis, range: [0, 110], ticksuffix: '%'},
+    showlegend: false,
+  }, PLOTLY_CFG);
+}
+
+function renderEquity(points) {
+  const id = 'chart-equity';
+  if (!points || points.length === 0) {
+    Plotly.purge(id);
+    document.getElementById(id).innerHTML = '<div class="empty">No completed trades yet</div>';
+    return;
+  }
+  const x = points.map(p => p.date);
+  const y = points.map(p => p.cumulative);
+  const colors = y.map((v, i) => {
+    if (i === 0) return v >= 0 ? '#26a69a' : '#ef5350';
+    return y[i] >= y[i-1] ? '#26a69a' : '#ef5350';
+  });
+
+  Plotly.react(id, [
+    {
+      type: 'scatter', mode: 'lines+markers',
+      x, y, name: 'Cumulative Pips',
+      line: {color: '#29b6f6', width: 2},
+      marker: {color: colors, size: 6},
+      fill: 'tozeroy',
+      fillcolor: y[y.length-1] >= 0
+        ? 'rgba(38,166,154,0.10)' : 'rgba(239,83,80,0.10)',
+    }
+  ], {
+    ...PLOTLY_DARK,
+    yaxis: {...PLOTLY_DARK.yaxis, ticksuffix: 'p'},
+    shapes: [{
+      type: 'line', x0: x[0], x1: x[x.length-1], y0: 0, y1: 0,
+      line: {color: '#30363d', width: 1, dash: 'dash'}
+    }],
+  }, PLOTLY_CFG);
+}
+
+function renderFactors(factors) {
+  const el = document.getElementById('factor-body');
+  if (!factors || factors.length === 0) {
+    el.innerHTML = '<div class="empty">No resolved signals yet</div>';
+    return;
+  }
+  const rows = factors.map(f => {
+    const wr = f.total > 0 ? f.win_rate : 0;
+    const fill = wr >= 50 ? '#26a69a' : '#ef5350';
+    return `<tr>
+      <td>${f.factor}</td>
+      <td style="color:#26a69a">${f.wins}</td>
+      <td style="color:#ef5350">${f.losses}</td>
+      <td>
+        <span style="font-weight:600;color:${fill}">${wr}%</span>
+        <div class="wr-bar"><div class="wr-fill" style="width:${wr}%;background:${fill}"></div></div>
+      </td>
+    </tr>`;
+  }).join('');
+  el.innerHTML = `<table class="factor-table">
+    <thead><tr><th>Factor</th><th>Wins</th><th>Losses</th><th>Win Rate</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function renderSignals(signals) {
+  const tbody = document.getElementById('signals-body');
+  if (!signals || signals.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="14" class="empty">No signals yet</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = signals.map(s => {
+    const dirBadge = s.direction === 'LONG'
+      ? '<span class="badge badge-long">LONG</span>'
+      : '<span class="badge badge-short">SHORT</span>';
+
+    let statusBadge;
+    if (s.status === 'ACTIVE')         statusBadge = '<span class="badge badge-active">ACTIVE</span>';
+    else if (s.status === 'HIT')       statusBadge = '<span class="badge badge-hit">HIT</span>';
+    else if (s.status === 'TP1_HIT')   statusBadge = '<span class="badge badge-tp1">TP1 HIT</span>';
+    else if (s.status === 'PARTIAL_WIN') statusBadge = '<span class="badge badge-partial">PARTIAL WIN</span>';
+    else if (s.status === 'EXPIRED')   statusBadge = '<span class="badge badge-expired">EXPIRED</span>';
+    else                               statusBadge = '<span class="badge badge-inv">LOSS</span>';
+
+    const pips = s.pnl_pips !== null
+      ? `<span class="${s.pnl_pips >= 0 ? 'pip-pos' : 'pip-neg'}">${s.pnl_pips >= 0 ? '+' : ''}${s.pnl_pips}</span>`
+      : '—';
+
+    const fmt = v => v !== null && v !== undefined ? v : '—';
+    const fmtDate = iso => iso ? new Date(iso).toLocaleString([], {
+      month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'
+    }) : '—';
+
+    return `<tr>
+      <td style="color:#8b949e">${s.id}</td>
+      <td style="font-weight:600">${s.pair}</td>
+      <td style="color:#29b6f6">${s.timeframe.toUpperCase()}</td>
+      <td>${dirBadge}</td>
+      <td style="color:#ffd700">${s.score}/10</td>
+      <td>${fmt(s.entry_price)}</td>
+      <td style="color:#26a69a">${fmt(s.target1)}</td>
+      <td style="color:#26a69a">${fmt(s.target2)}</td>
+      <td style="color:#ef5350">${fmt(s.invalidation)}</td>
+      <td>${statusBadge}</td>
+      <td style="color:#8b949e">${s.hit_target || '—'}</td>
+      <td>${pips}</td>
+      <td style="color:#8b949e">${fmtDate(s.created_at)}</td>
+      <td style="color:#8b949e">${fmtDate(s.hit_at)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function set(id, val) {
+  document.getElementById(id).textContent = val;
+}
+
+function startCountdown() {
+  clearInterval(timer);
+  countdown = 60;
+  timer = setInterval(() => {
+    countdown--;
+    document.getElementById('refresh-timer').textContent = `Refreshing in ${countdown}s`;
+    if (countdown <= 0) {
+      fetchStats();
+      countdown = 60;
+    }
+  }, 1000);
+}
+
+fetchStats();
+startCountdown();
+</script>
+</body>
+</html>

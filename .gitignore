@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+*.db
+*.sqlite3
+/tmp/chart_*.png
+*.log
+.DS_Store
+
+.superpowers/

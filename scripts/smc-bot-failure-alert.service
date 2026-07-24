@@ -1,0 +1,6 @@
+[Unit]
+Description=Telegram alert when smc_bot.service fails
+
+[Service]
+Type=oneshot
+ExecStart=/root/smc_bot/scripts/notify_failure.sh
