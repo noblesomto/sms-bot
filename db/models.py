@@ -22,7 +22,7 @@ class Signal(Base):
     alerted_at = Column(DateTime(timezone=True), nullable=True)
     status = Column(String(20), default="ACTIVE")
     # Outcome tracking
-    entry_price = Column(Float, nullable=True)       # midpoint of entry zone
+    entry_price = Column(Float, nullable=True)       # market price at alert time (rows before 2026-07-24 hold zone midpoints)
     hit_target = Column(String(10), nullable=True)   # TP1 | TP2 | SL
     hit_at = Column(DateTime(timezone=True), nullable=True)
     pnl_pips = Column(Float, nullable=True)          # positive = profit

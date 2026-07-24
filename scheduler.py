@@ -231,9 +231,9 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
                 wyckoff_context=wyckoff_ctx, entry_price=current_price,
             )
 
-            # Re-fetch live candles for the chart — the scan df can be up to a
-            # cache-TTL old (58 min on 1H), which made alert charts trail the
-            # user's broker by up to a full bar.
+            # Re-fetch live candles for the chart — this guarantees the chart
+            # shows live candles at alert time, rather than whatever was cached
+            # when the scan pass started.
             chart_df = await asyncio.to_thread(get_candles, pair, timeframe, 200, True)
             if chart_df is None or chart_df.empty:
                 chart_df = df
@@ -554,6 +554,30 @@ def _resolve_outcome(direction: str, status: str, high: float, low: float,
     return None
 
 
+def _sweep_outcome(direction: str, status: str, candles, target1, target2, invalidation):
+    """Scan candles oldest→newest and return the first outcome found.
+
+    A wick that hit SL/TP several candles ago must not be missed just because
+    price has since drifted away and the latest bar alone is quiet — checking
+    only the last candle (the previous approach) silently dropped resolutions
+    that happened between the previous check and now.
+
+    `status` is evaluated against every candle unchanged (it does not switch
+    to TP1_HIT mid-sweep even once a TP1 candle is found): this keeps the
+    simpler stop-at-first-outcome contract — a TP1 hit ends the sweep just
+    like a terminal SL/TP2 would, and the next 5-min check resumes scanning
+    from `hit_at` onward in TP1_HIT state (spec 2026-07-24 §2.5, "choose the
+    simpler stop-at-first-outcome approach").
+
+    `candles` is an iterable of (high, low) pairs, oldest first.
+    """
+    for high, low in candles:
+        outcome = _resolve_outcome(direction, status, high, low, target1, target2, invalidation)
+        if outcome:
+            return outcome
+    return None
+
+
 async def check_signal_status():
     """Hourly job: resolve active signals against latest price and record outcome.
 
@@ -603,11 +627,29 @@ async def check_signal_status():
                 df = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 50)
                 if df is None or df.empty:
                     continue
-                last = df.iloc[-1]
-                high, low = float(last["high"]), float(last["low"])
 
-                outcome = _resolve_outcome(
-                    sig.direction, sig.status, high, low,
+                # Sweep every candle since the signal reached its current state —
+                # not just the latest bar — so a wick that hit SL/TP between the
+                # previous check and now isn't missed just because price has since
+                # moved away. ACTIVE sweeps from created_at; TP1_HIT sweeps from
+                # hit_at so pre-TP1 candles aren't re-evaluated against TP1_HIT
+                # rules. Both timestamps may come back naive from the DB — treat
+                # naive as UTC, mirroring the expiry check above.
+                start_ts = sig.created_at if sig.status == "ACTIVE" else sig.hit_at
+                if start_ts is not None and start_ts.tzinfo is None:
+                    start_ts = start_ts.replace(tzinfo=timezone.utc)
+
+                window_df = df[df["datetime"] > start_ts] if start_ts is not None else df
+                if window_df.empty:
+                    # Signal created only seconds ago — no candle qualifies yet;
+                    # fall back to the latest bar as before.
+                    window_df = df.tail(1)
+
+                candles = list(zip(
+                    window_df["high"].astype(float), window_df["low"].astype(float)
+                ))
+                outcome = _sweep_outcome(
+                    sig.direction, sig.status, candles,
                     sig.target1, sig.target2, sig.invalidation,
                 )
                 if not outcome:

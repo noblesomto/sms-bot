@@ -43,6 +43,20 @@ def test_ob_at_end_of_data_fails_open():
     rows = FLAT + [(100.5, 100.6, 99.6, 99.8)]
     assert not _has_displacement(_df(rows), 15, "BULLISH")
 
+def test_micro_gap_fails_displacement():
+    # Weak travel (like test_drift_fails) plus a sliver of a "gap" well under
+    # the 0.1% MIN_GAP_PCT noise floor from core/fvg.py: candle 17's low
+    # (100.62) clears candle 15's high (100.6) by only 0.02, against a
+    # reference price (candle 16's close) of ~100.55 -> gap/mid ~= 0.02%.
+    # Before the fix, any positive gap counted as displacement; now it must
+    # clear the same noise floor scan_fvgs() itself enforces.
+    rows = FLAT + [(100.5, 100.6, 99.6, 99.8),
+                   (99.8, 100.6, 99.7, 100.55),
+                   (100.63, 100.75, 100.62, 100.65),
+                   (100.65, 100.8, 100.6, 100.7)]
+    assert not _has_displacement(_df(rows), 15, "BULLISH")
+
+
 def test_full_pipeline_finds_displaced_ob():
     # Integration guard: the module self-test's realistic fixture must clear
     # the full pipeline (identify_swings -> detect_bos -> find_order_blocks ->

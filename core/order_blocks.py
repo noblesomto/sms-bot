@@ -5,6 +5,7 @@ import pandas as pd
 try:
     from config import settings
     from core.precision import price_precision
+    from core.fvg import MIN_GAP_PCT
 except ImportError:
     # Allow direct script invocation (./venv/bin/python3 core/order_blocks.py):
     # the script's own directory is on sys.path, not the project root, so the
@@ -14,6 +15,7 @@ except ImportError:
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
     from config import settings
     from core.precision import price_precision
+    from core.fvg import MIN_GAP_PCT
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +48,21 @@ def _has_displacement(df: pd.DataFrame, ob_idx: int, direction: str) -> bool:
     if atr > 0 and travel >= settings.DISPLACEMENT_ATR_MULT * atr:
         return True
 
-    # FVG in the follow-through: 3-bar imbalance among candles ob_idx..ob_idx+window
+    # FVG in the follow-through: 3-bar imbalance among candles ob_idx..ob_idx+window.
+    # Gap size must clear the same noise floor as core/fvg.py (MIN_GAP_PCT of the
+    # middle candle's close) — an inline check with no minimum accepted any sliver
+    # of a gap as "displacement", including sub-noise-floor gaps scan_fvgs() itself
+    # would discard.
     for j in range(ob_idx + 1, min(ob_idx + window, len(df) - 1)):
+        mid = float(df.iloc[j]["close"])
         if direction == "BULLISH" and float(df.iloc[j + 1]["low"]) > float(df.iloc[j - 1]["high"]):
-            return True
+            gap = float(df.iloc[j + 1]["low"]) - float(df.iloc[j - 1]["high"])
+            if gap >= MIN_GAP_PCT * mid:
+                return True
         if direction == "BEARISH" and float(df.iloc[j + 1]["high"]) < float(df.iloc[j - 1]["low"]):
-            return True
+            gap = float(df.iloc[j - 1]["low"]) - float(df.iloc[j + 1]["high"])
+            if gap >= MIN_GAP_PCT * mid:
+                return True
     return False
 
 
