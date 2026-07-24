@@ -2,11 +2,47 @@ import logging
 from typing import Optional
 import pandas as pd
 
+from config import settings
 from core.precision import price_precision
 
 logger = logging.getLogger(__name__)
 
 MAX_ACTIVE_OBS = 5  # Maximum unmitigated OBs to track per direction
+
+
+def _has_displacement(df: pd.DataFrame, ob_idx: int, direction: str) -> bool:
+    """ICT displacement gate: an OB is only tradeable if the move leaving it
+    was impulsive — within DISPLACEMENT_WINDOW candles after the OB, price
+    travels ≥ DISPLACEMENT_ATR_MULT × ATR(14 at formation), or the follow-
+    through leaves an FVG. Weak zones without displacement are discarded
+    (spec 2026-07-24 §2.4)."""
+    window = settings.DISPLACEMENT_WINDOW
+    seg = df.iloc[ob_idx + 1: ob_idx + 1 + window]
+    if seg.empty:
+        return False
+
+    hist = df.iloc[max(0, ob_idx - 14): ob_idx + 1]
+    prev_close = hist["close"].shift(1)
+    tr = pd.concat([hist["high"] - hist["low"],
+                    (hist["high"] - prev_close).abs(),
+                    (hist["low"] - prev_close).abs()], axis=1).max(axis=1)
+    atr = float(tr.mean())
+    ob_close = float(df.iloc[ob_idx]["close"])
+
+    if direction == "BULLISH":
+        travel = float(seg["high"].max()) - ob_close
+    else:
+        travel = ob_close - float(seg["low"].min())
+    if atr > 0 and travel >= settings.DISPLACEMENT_ATR_MULT * atr:
+        return True
+
+    # FVG in the follow-through: 3-bar imbalance among candles ob_idx..ob_idx+window
+    for j in range(ob_idx + 1, min(ob_idx + window, len(df) - 1)):
+        if direction == "BULLISH" and float(df.iloc[j + 1]["low"]) > float(df.iloc[j - 1]["high"]):
+            return True
+        if direction == "BEARISH" and float(df.iloc[j + 1]["high"]) < float(df.iloc[j - 1]["low"]):
+            return True
+    return False
 
 
 def find_order_blocks(df: pd.DataFrame, bos_events: list) -> list:
@@ -32,14 +68,16 @@ def find_order_blocks(df: pd.DataFrame, bos_events: list) -> list:
             for i in range(broken_idx, search_start - 1, -1):
                 candle = df.iloc[i]
                 if float(candle["close"]) < float(candle["open"]):  # bearish candle
-                    obs.append(_make_ob(candle, i, "BULLISH"))
+                    if _has_displacement(df, i, "BULLISH"):
+                        obs.append(_make_ob(candle, i, "BULLISH"))
                     break
 
         elif direction == "BEARISH":
             for i in range(broken_idx, search_start - 1, -1):
                 candle = df.iloc[i]
                 if float(candle["close"]) > float(candle["open"]):  # bullish candle
-                    obs.append(_make_ob(candle, i, "BEARISH"))
+                    if _has_displacement(df, i, "BEARISH"):
+                        obs.append(_make_ob(candle, i, "BEARISH"))
                     break
 
     return obs
@@ -116,11 +154,50 @@ def get_price_at_ob(obs: list, current_price: float) -> Optional[dict]:
 
 
 def test_order_blocks():
-    """Standalone test — 30-candle uptrend produces a bullish BOS and OB."""
-    highs = [103,104,106,107,109,111,112,114,115,118,116,114,115,117,119,121,120,118,119,122,121,119,120,123,125,124,122,123,126,128]
-    lows  = [99, 100,100,103,102,106,104,108,106,110,108,106,107,109,111,113,111,109,110,113,112,110,111,114,116,114,112,113,116,118]
-    opens = [100,102,101,105,103,108,106,110,107,112,114,112,109,111,113,115,118,116,113,115,118,118,115,116,119,122,121,118,119,122]
-    closes= [102,101,105,103,108,106,110,107,112,116,113,110,112,114,116,118,117,115,116,119,118,116,117,120,122,121,119,120,123,126]
+    """Standalone test — simplified OB + displacement demonstration.
+    Note: test_displacement.py provides comprehensive gate testing.
+    This self-test verifies basic OB structure still works with the gate.
+    """
+    # Pattern: Uptrend → Bearish OB → Strong impulsive recovery → Trend
+    # The impulsive recovery after the OB demonstrates displacement.
+    # The detailed gate logic is tested in test_displacement.py (5 test cases).
+    rows = [
+        # Rising trend with pullback to create OB candidate (indices 0-8)
+        (100, 102, 100, 101),        # idx 0: up
+        (101, 103, 101, 102),        # idx 1: up (swing high potential)
+        (102, 104, 101, 102.5),      # idx 2: up
+        (102.5, 104.5, 102, 103),    # idx 3: up (swing high potential)
+        (103, 105, 102.5, 103.5),    # idx 4: up
+        (103.5, 105.5, 103, 104),    # idx 5: up (swing high potential)
+        (104, 106, 103.5, 104.5),    # idx 6: up
+        (104.5, 106.5, 104, 105),    # idx 7: up (swing high = 106.5)
+        (105, 105, 103, 104),        # idx 8: pullback, bullish doji
+        # Bearish OB and impulsive recovery (indices 9-11)
+        (104, 104.5, 102.5, 102.8),  # idx 9: bearish (open 104 > close 102.8)
+        (102.8, 107, 102.8, 106.5),  # idx 10: strong impulse
+        (106.5, 109, 106.5, 108.5),  # idx 11: strong impulse
+        # More data for structure detection and BOS confirmation (indices 12-29)
+        (108.5, 110, 108, 109),
+        (109, 111, 108.5, 110),
+        (110, 112, 109.5, 111),
+        (111, 113, 110.5, 112),
+        (112, 114, 111.5, 113),
+        (113, 115, 112.5, 114),
+        (114, 116, 113.5, 115),
+        (115, 117, 114.5, 116),
+        (116, 118, 115.5, 117),
+        (117, 119, 116.5, 118),
+        (118, 120, 117.5, 119),
+        (119, 121, 118.5, 120),
+        (120, 122, 119.5, 121),
+        (121, 123, 120.5, 122),
+        (122, 124, 121.5, 123),
+        (123, 125, 122.5, 124),
+    ]
+    highs = [r[1] for r in rows]
+    lows = [r[2] for r in rows]
+    opens = [r[0] for r in rows]
+    closes = [r[3] for r in rows]
     n = len(closes)
     data = {
         "open": opens, "high": highs, "low": lows, "close": closes,
