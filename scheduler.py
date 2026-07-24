@@ -22,7 +22,7 @@ from core.sessions import is_in_kill_zone, get_current_session, is_weekend
 from core.premium_discount import get_premium_discount_zones
 from core.confluence import score_signal
 from core.wyckoff import get_wyckoff_context
-from alerts.formatter import format_signal_alert, format_tp_hit_alert
+from alerts.formatter import format_signal_alert, format_tp_hit_alert, format_expiry_alert
 from alerts.telegram_bot import send_alert, send_tp_notification
 from charts.plotter import generate_chart, cleanup_old_charts
 
@@ -584,6 +584,19 @@ async def check_signal_status():
                         sig.hit_target = "EXPIRED"
                         sig.hit_at = now
                         resolved += 1
+                        df_exp = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 5)
+                        cur = unrealized = None
+                        if df_exp is not None and not df_exp.empty:
+                            cur = float(df_exp["close"].iloc[-1])
+                            diff = (cur - entry) if sig.direction == "LONG" else (entry - cur)
+                            unrealized = _calc_pips(sig.pair, diff)
+                        await send_tp_notification(format_expiry_alert(
+                            pair=sig.pair, direction=sig.direction,
+                            timeframe=sig.timeframe, entry=entry,
+                            current_price=cur, unrealized_pips=unrealized,
+                            expiry_hours=expiry_hours,
+                        ))
+                        logger.info(f"[{sig.pair}/{sig.timeframe}] expired after {expiry_hours}h — user notified")
                         continue
 
             df = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 50)

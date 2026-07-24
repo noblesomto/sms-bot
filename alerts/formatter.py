@@ -98,6 +98,34 @@ def format_tp_hit_alert(
     return "\n".join(lines)
 
 
+def format_expiry_alert(pair, direction, timeframe, entry,
+                        current_price, unrealized_pips, expiry_hours) -> str:
+    """Sent when a signal expires with neither TP nor SL hit. The user enters
+    at market on alert, so an expired signal is an open position they are
+    still holding — tell them the bot has stopped tracking it."""
+    dir_emoji = "🟢" if direction == "LONG" else "🔴"
+    if current_price is not None:
+        sign = "+" if unrealized_pips >= 0 else ""
+        price_line = (f"📉 Current: {_fmt(current_price)} "
+                      f"({sign}{unrealized_pips} pips unrealized)")
+    else:
+        price_line = "📉 Current: n/a"
+    return "\n".join([
+        f"⌛ SIGNAL EXPIRED — {pair}",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"{dir_emoji} Direction: {direction} | {timeframe.upper()}",
+        f"📍 Entry: {_fmt(entry)}",
+        price_line,
+        "",
+        f"No TP/SL hit within {expiry_hours}h — the bot is no longer tracking",
+        "this signal. If you entered, close or manage the position manually.",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ])
+
+
 def test_formatter():
     """Standalone test — prints the formatted alert for a sample LONG signal."""
     msg = format_signal_alert(
