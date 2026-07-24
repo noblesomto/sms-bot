@@ -2,11 +2,68 @@ import logging
 from typing import Optional
 import pandas as pd
 
-from core.precision import price_precision
+try:
+    from config import settings
+    from core.precision import price_precision
+    from core.fvg import MIN_GAP_PCT
+except ImportError:
+    # Allow direct script invocation (./venv/bin/python3 core/order_blocks.py):
+    # the script's own directory is on sys.path, not the project root, so the
+    # top-level `config` and `core` packages aren't importable without this.
+    import sys
+    import pathlib
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+    from config import settings
+    from core.precision import price_precision
+    from core.fvg import MIN_GAP_PCT
 
 logger = logging.getLogger(__name__)
 
 MAX_ACTIVE_OBS = 5  # Maximum unmitigated OBs to track per direction
+
+
+def _has_displacement(df: pd.DataFrame, ob_idx: int, direction: str) -> bool:
+    """ICT displacement gate: an OB is only tradeable if the move leaving it
+    was impulsive — within DISPLACEMENT_WINDOW candles after the OB, price
+    travels ≥ DISPLACEMENT_ATR_MULT × ATR(14 at formation), or the follow-
+    through leaves an FVG. Weak zones without displacement are discarded
+    (spec 2026-07-24 §2.4)."""
+    window = settings.DISPLACEMENT_WINDOW
+    seg = df.iloc[ob_idx + 1: ob_idx + 1 + window]
+    if seg.empty:
+        return False
+
+    hist = df.iloc[max(0, ob_idx - 14): ob_idx + 1]
+    prev_close = hist["close"].shift(1)
+    tr = pd.concat([hist["high"] - hist["low"],
+                    (hist["high"] - prev_close).abs(),
+                    (hist["low"] - prev_close).abs()], axis=1).max(axis=1)
+    atr = float(tr.mean())
+    ob_close = float(df.iloc[ob_idx]["close"])
+
+    if direction == "BULLISH":
+        travel = float(seg["high"].max()) - ob_close
+    else:
+        travel = ob_close - float(seg["low"].min())
+    if atr > 0 and travel >= settings.DISPLACEMENT_ATR_MULT * atr:
+        return True
+
+    # FVG in the follow-through: 3-bar imbalance among candles ob_idx..ob_idx+window.
+    # Gap size must clear the same noise floor as core/fvg.py (MIN_GAP_PCT of the
+    # middle candle's close) — an inline check with no minimum accepted any sliver
+    # of a gap as "displacement", including sub-noise-floor gaps scan_fvgs() itself
+    # would discard.
+    for j in range(ob_idx + 1, min(ob_idx + window, len(df) - 1)):
+        mid = float(df.iloc[j]["close"])
+        if direction == "BULLISH" and float(df.iloc[j + 1]["low"]) > float(df.iloc[j - 1]["high"]):
+            gap = float(df.iloc[j + 1]["low"]) - float(df.iloc[j - 1]["high"])
+            if gap >= MIN_GAP_PCT * mid:
+                return True
+        if direction == "BEARISH" and float(df.iloc[j + 1]["high"]) < float(df.iloc[j - 1]["low"]):
+            gap = float(df.iloc[j - 1]["low"]) - float(df.iloc[j + 1]["high"])
+            if gap >= MIN_GAP_PCT * mid:
+                return True
+    return False
 
 
 def find_order_blocks(df: pd.DataFrame, bos_events: list) -> list:
@@ -32,14 +89,16 @@ def find_order_blocks(df: pd.DataFrame, bos_events: list) -> list:
             for i in range(broken_idx, search_start - 1, -1):
                 candle = df.iloc[i]
                 if float(candle["close"]) < float(candle["open"]):  # bearish candle
-                    obs.append(_make_ob(candle, i, "BULLISH"))
+                    if _has_displacement(df, i, "BULLISH"):
+                        obs.append(_make_ob(candle, i, "BULLISH"))
                     break
 
         elif direction == "BEARISH":
             for i in range(broken_idx, search_start - 1, -1):
                 candle = df.iloc[i]
                 if float(candle["close"]) > float(candle["open"]):  # bullish candle
-                    obs.append(_make_ob(candle, i, "BEARISH"))
+                    if _has_displacement(df, i, "BEARISH"):
+                        obs.append(_make_ob(candle, i, "BEARISH"))
                     break
 
     return obs
@@ -116,11 +175,61 @@ def get_price_at_ob(obs: list, current_price: float) -> Optional[dict]:
 
 
 def test_order_blocks():
-    """Standalone test — 30-candle uptrend produces a bullish BOS and OB."""
-    highs = [103,104,106,107,109,111,112,114,115,118,116,114,115,117,119,121,120,118,119,122,121,119,120,123,125,124,122,123,126,128]
-    lows  = [99, 100,100,103,102,106,104,108,106,110,108,106,107,109,111,113,111,109,110,113,112,110,111,114,116,114,112,113,116,118]
-    opens = [100,102,101,105,103,108,106,110,107,112,114,112,109,111,113,115,118,116,113,115,118,118,115,116,119,122,121,118,119,122]
-    closes= [102,101,105,103,108,106,110,107,112,116,113,110,112,114,116,118,117,115,116,119,118,116,117,120,122,121,119,120,123,126]
+    """Standalone test — simplified OB + displacement demonstration.
+    Note: test_displacement.py provides comprehensive gate testing.
+    This self-test verifies basic OB structure still works with the gate.
+
+    Fixture design (realistic continuous OHLC — each candle opens at/near the
+    prior close, wicks contained, no unrealistic open/close gaps):
+      idx 0-13:  a quiet base establishing ATR(14) baseline (~0.2-0.3 range/candle)
+      idx 14:    a clear bearish candle — the Order Block candidate
+      idx 15-17: a genuinely impulsive rally (~4-5x the base ATR per candle)
+                 that both demonstrates displacement off the OB and forms the
+                 swing high (idx 17)
+      idx 18-21: a minor consolidation with lower highs than idx 17, needed so
+                 identify_swings(lookback=3) confirms idx 17 as a swing high
+      idx 22:    breakout candle that closes back above the idx-17 swing high,
+                 triggering the BULLISH BOS
+      idx 23-25: trailing candles for context
+    """
+    rows = [
+        # Quiet base (indices 0-13): modest, continuous candles
+        (100.0, 100.1, 99.9, 100.0),
+        (100.0, 100.25, 99.9, 100.15),
+        (100.15, 100.25, 99.95, 100.05),
+        (100.05, 100.3, 99.95, 100.2),
+        (100.2, 100.3, 100.0, 100.1),
+        (100.1, 100.35, 100.0, 100.25),
+        (100.25, 100.35, 100.05, 100.15),
+        (100.15, 100.4, 100.05, 100.3),
+        (100.3, 100.4, 100.1, 100.2),
+        (100.2, 100.45, 100.1, 100.35),
+        (100.35, 100.45, 100.15, 100.25),
+        (100.25, 100.5, 100.15, 100.4),
+        (100.4, 100.5, 100.2, 100.3),
+        (100.3, 100.55, 100.2, 100.45),
+        # idx 14: Order Block candidate — clear bearish candle
+        (100.45, 100.5, 100.1, 100.15),
+        # idx 15-17: impulsive breakout rally (creates the swing high at idx 17)
+        (100.15, 101.25, 100.05, 101.15),
+        (101.15, 102.35, 101.05, 102.25),
+        (102.25, 103.25, 102.15, 103.15),
+        # idx 18-21: minor consolidation, lower highs than idx 17
+        (103.15, 103.18, 102.92, 102.95),
+        (102.95, 103.08, 102.92, 103.05),
+        (103.05, 103.08, 102.87, 102.9),
+        (102.9, 102.98, 102.87, 102.95),
+        # idx 22: breakout candle — closes above the idx-17 swing high -> BOS
+        (102.95, 104.06, 102.85, 103.96),
+        # idx 23-25: trailing context
+        (103.96, 104.36, 103.86, 104.26),
+        (104.26, 104.56, 104.16, 104.46),
+        (104.46, 104.56, 104.26, 104.36),
+    ]
+    highs = [r[1] for r in rows]
+    lows = [r[2] for r in rows]
+    opens = [r[0] for r in rows]
+    closes = [r[3] for r in rows]
     n = len(closes)
     data = {
         "open": opens, "high": highs, "low": lows, "close": closes,

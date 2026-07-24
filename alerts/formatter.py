@@ -21,6 +21,7 @@ def format_signal_alert(
     timestamp: datetime = None,
     max_score: int = 10,
     wyckoff_context: dict = None,
+    entry_price: float = None,
 ) -> str:
     """
     Build a Telegram-ready alert message for an SMC/ICT + Wyckoff signal.
@@ -42,6 +43,13 @@ def format_signal_alert(
     if wyckoff_context and wyckoff_context.get("key_event"):
         wyckoff_line = f"📐 Wyckoff: {wyckoff_context['description']}\n\n"
 
+    entry_line = (
+        f"📍 Entry (market): {_fmt(entry_price)}\n"
+        f"   OB zone: {_fmt(entry_low)} – {_fmt(entry_high)}\n\n"
+        if entry_price is not None
+        else f"📍 Entry Zone: {_fmt(entry_low)} – {_fmt(entry_high)}\n\n"
+    )
+
     return (
         f"{emoji} {label} — {pair}\n\n"
         f"━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -49,7 +57,7 @@ def format_signal_alert(
         f"⚡ Confluence Score: {confluence_score}/{max_score}\n"
         f"✅ Factors:\n{factors_text}\n\n"
         f"{wyckoff_line}"
-        f"📍 Entry Zone: {_fmt(entry_low)} – {_fmt(entry_high)}\n\n"
+        f"{entry_line}"
         f"🎯 Target 1: {_fmt(target1)}\n\n"
         f"🎯 Target 2: {_fmt(target2)}\n\n"
         f"🛑 Stop Loss: {_fmt(invalidation)} (OB {ob_side})\n"
@@ -88,6 +96,34 @@ def format_tp_hit_alert(
         lines.append(f"👀 Watching for TP2: {_fmt(target2)}")
     lines += ["", "━━━━━━━━━━━━━━━━━━━━"]
     return "\n".join(lines)
+
+
+def format_expiry_alert(pair, direction, timeframe, entry,
+                        current_price, unrealized_pips, expiry_hours) -> str:
+    """Sent when a signal expires with neither TP nor SL hit. The user enters
+    at market on alert, so an expired signal is an open position they are
+    still holding — tell them the bot has stopped tracking it."""
+    dir_emoji = "🟢" if direction == "LONG" else "🔴"
+    if current_price is not None:
+        sign = "+" if unrealized_pips >= 0 else ""
+        price_line = (f"📉 Current: {_fmt(current_price)} "
+                      f"({sign}{unrealized_pips} pips unrealized)")
+    else:
+        price_line = "📉 Current: n/a"
+    return "\n".join([
+        f"⌛ SIGNAL EXPIRED — {pair}",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"{dir_emoji} Direction: {direction} | {timeframe.upper()}",
+        f"📍 Entry: {_fmt(entry)}",
+        price_line,
+        "",
+        f"No TP/SL hit within {expiry_hours}h — the bot is no longer tracking",
+        "this signal. If you entered, close or manage the position manually.",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ])
 
 
 def test_formatter():

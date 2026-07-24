@@ -22,7 +22,7 @@ from core.sessions import is_in_kill_zone, get_current_session, is_weekend
 from core.premium_discount import get_premium_discount_zones
 from core.confluence import score_signal
 from core.wyckoff import get_wyckoff_context
-from alerts.formatter import format_signal_alert, format_tp_hit_alert
+from alerts.formatter import format_signal_alert, format_tp_hit_alert, format_expiry_alert
 from alerts.telegram_bot import send_alert, send_tp_notification
 from charts.plotter import generate_chart, cleanup_old_charts
 
@@ -31,6 +31,10 @@ scheduler = AsyncIOScheduler(timezone="UTC")
 
 # How long a signal stays ACTIVE before being auto-expired (no TP/SL hit)
 TF_EXPIRY_HOURS = {"5min": 4, "15min": 12, "1h": 48}
+
+# Candle duration per timeframe, used to determine when a bar has fully closed
+_TF_DELTA = {"5min": timedelta(minutes=5), "15min": timedelta(minutes=15),
+             "1h": timedelta(hours=1), "4h": timedelta(hours=4)}
 
 
 async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
@@ -198,9 +202,9 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
             target1, target2, invalidation = _calc_risk(direction, current_price, ob_at_price, all_levels, pair)
 
             # ── Filter 5: Minimum 2:1 risk/reward ────────────────────────────
-            if not _check_rr(direction, entry_low, entry_high, target1, invalidation, min_rr=2.0):
+            if not _check_rr(direction, current_price, target1, invalidation, min_rr=2.0):
                 logger.info(f"[{pair}/{timeframe}] Skipping {direction} — R:R below 2:1 "
-                            f"(entry={entry_low}-{entry_high} t1={target1} sl={invalidation})")
+                            f"(market={current_price} zone={entry_low}-{entry_high} t1={target1} sl={invalidation})")
                 continue
 
             # ── Filter 6: No conflicting active signal (opposite direction) ───
@@ -219,7 +223,7 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
                 pair=pair, timeframe=timeframe, direction=direction,
                 score=conf["score"], entry_low=entry_low, entry_high=entry_high,
                 target1=target1, target2=target2, invalidation=invalidation,
-                factors=conf["factors"],
+                factors=conf["factors"], entry_price=current_price,
             )
 
             message = format_signal_alert(
@@ -228,12 +232,12 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
                 max_score=conf["max_score"],
                 factors=conf["factors"], entry_low=entry_low, entry_high=entry_high,
                 target1=target1, target2=target2, invalidation=invalidation,
-                wyckoff_context=wyckoff_ctx,
+                wyckoff_context=wyckoff_ctx, entry_price=current_price,
             )
 
-            # Re-fetch live candles for the chart — the scan df can be up to a
-            # cache-TTL old (58 min on 1H), which made alert charts trail the
-            # user's broker by up to a full bar.
+            # Re-fetch live candles for the chart — this guarantees the chart
+            # shows live candles at alert time, rather than whatever was cached
+            # when the scan pass started.
             chart_df = await asyncio.to_thread(get_candles, pair, timeframe, 200, True)
             if chart_df is None or chart_df.empty:
                 chart_df = df
@@ -270,16 +274,17 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
     return result
 
 
-def _check_rr(direction: str, entry_low: float, entry_high: float,
+def _check_rr(direction: str, entry_price: float,
               target1: float, invalidation: float, min_rr: float = 1.5) -> bool:
-    """Return True only if TP1 distance is at least min_rr × SL distance."""
-    entry_mid = (entry_low + entry_high) / 2
+    """Return True only if TP1 distance is at least min_rr × SL distance,
+    measured from the live market price — the user enters at market on alert,
+    so zone-midpoint R:R overstated reality (spec 2026-07-24 §2.1)."""
     if direction == "LONG":
-        reward = target1 - entry_mid
-        risk = entry_mid - invalidation
+        reward = target1 - entry_price
+        risk = entry_price - invalidation
     else:
-        reward = entry_mid - target1
-        risk = invalidation - entry_mid
+        reward = entry_price - target1
+        risk = invalidation - entry_price
     if risk <= 0 or reward <= 0:
         return False
     return (reward / risk) >= min_rr
@@ -464,10 +469,10 @@ def _calc_pips(pair: str, price_diff: float) -> float:
 def _save_signal(
     pair, timeframe, direction, score,
     entry_low, entry_high, target1, target2, invalidation, factors,
+    entry_price: float,
 ) -> int:
     """Persist a new signal row and return its primary key."""
     prec = price_precision(entry_low)
-    entry_price = round((entry_low + entry_high) / 2, prec)
     db = SessionLocal()
     try:
         sig = Signal(
@@ -480,7 +485,7 @@ def _save_signal(
             invalidation=round(invalidation, prec) if invalidation is not None else None,
             factors_json=json.dumps(factors),
             status="ACTIVE",
-            entry_price=entry_price,
+            entry_price=round(entry_price, prec),
         )
         db.add(sig)
         db.commit()
@@ -524,6 +529,69 @@ async def run_scan_now():
     await run_full_scan()
 
 
+def _resolve_outcome(direction: str, status: str, high: float, low: float,
+                     target1, target2, invalidation):
+    """Wick-touch TP/SL resolution for one candle. SL is checked first: when a
+    single bar touches both stop and target, bar data cannot order the touches,
+    so the conservative loss is assumed (spec 2026-07-24 §2.2)."""
+    if direction == "LONG":
+        sl_hit = invalidation is not None and low <= invalidation
+        tp2_hit = target2 is not None and high >= target2
+        tp1_hit = target1 is not None and high >= target1
+    else:
+        sl_hit = invalidation is not None and high >= invalidation
+        tp2_hit = target2 is not None and low <= target2
+        tp1_hit = target1 is not None and low <= target1
+
+    if status == "ACTIVE":
+        if sl_hit:
+            return ("SL", invalidation)
+        if tp2_hit:
+            return ("TP2", target2)
+        if tp1_hit:
+            return ("TP1", target1)
+    elif status == "TP1_HIT":
+        if sl_hit:
+            return ("SL_AFTER_TP1", invalidation)
+        if tp2_hit:
+            return ("TP2", target2)
+    return None
+
+
+def _sweep_outcome(direction: str, status: str, candles, target1, target2, invalidation):
+    """Scan candles oldest→newest and return the first outcome found.
+
+    A wick that hit SL/TP several candles ago must not be missed just because
+    price has since drifted away and the latest bar alone is quiet — checking
+    only the last candle (the previous approach) silently dropped resolutions
+    that happened between the previous check and now.
+
+    `status` is evaluated against every candle unchanged (it does not switch
+    to TP1_HIT mid-sweep even once a TP1 candle is found): this keeps the
+    simpler stop-at-first-outcome contract — a TP1 hit ends the sweep just
+    like a terminal SL/TP2 would, and the next hourly check resumes scanning
+    from `hit_at` onward in TP1_HIT state (spec 2026-07-24 §2.5, "choose the
+    simpler stop-at-first-outcome approach").
+
+    `candles` is an iterable of (high, low) pairs, oldest first.
+    """
+    for high, low in candles:
+        outcome = _resolve_outcome(direction, status, high, low, target1, target2, invalidation)
+        if outcome:
+            return outcome
+    return None
+
+
+def _sweep_window(df, start_ts, timeframe):
+    """Candles still open at or opened after start_ts. Compares candle CLOSE
+    time (open + timeframe) so the bar forming when the signal/TP1 fired is
+    included — its remaining wicks are the likeliest to hit the stop."""
+    if start_ts is None:
+        return df
+    delta = _TF_DELTA.get(timeframe, timedelta(hours=1))
+    return df[df["datetime"] + delta > start_ts]
+
+
 async def check_signal_status():
     """Hourly job: resolve active signals against latest price and record outcome.
 
@@ -542,111 +610,123 @@ async def check_signal_status():
         resolved = 0
 
         for sig in watchlist:
-            entry = sig.entry_price or ((sig.entry_zone_low + sig.entry_zone_high) / 2)
+            try:
+                entry = sig.entry_price or ((sig.entry_zone_low + sig.entry_zone_high) / 2)
 
-            # ── Expiry check (only ACTIVE signals expire; TP1_HIT never expires) ──
-            if sig.status == "ACTIVE":
-                expiry_hours = TF_EXPIRY_HOURS.get(sig.timeframe, 48)
-                if sig.created_at:
-                    created = sig.created_at if sig.created_at.tzinfo else sig.created_at.replace(tzinfo=timezone.utc)
-                    if (now - created) > timedelta(hours=expiry_hours):
-                        sig.status = "EXPIRED"
-                        sig.hit_target = "EXPIRED"
-                        sig.hit_at = now
-                        resolved += 1
-                        continue
+                # ── Expiry check (only ACTIVE signals expire; TP1_HIT never expires) ──
+                if sig.status == "ACTIVE":
+                    expiry_hours = TF_EXPIRY_HOURS.get(sig.timeframe, 48)
+                    if sig.created_at:
+                        created = sig.created_at if sig.created_at.tzinfo else sig.created_at.replace(tzinfo=timezone.utc)
+                        if (now - created) > timedelta(hours=expiry_hours):
+                            sig.status = "EXPIRED"
+                            sig.hit_target = "EXPIRED"
+                            sig.hit_at = now
+                            resolved += 1
+                            df_exp = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 5)
+                            cur = unrealized = None
+                            if df_exp is not None and not df_exp.empty:
+                                cur = float(df_exp["close"].iloc[-1])
+                                diff = (cur - entry) if sig.direction == "LONG" else (entry - cur)
+                                unrealized = _calc_pips(sig.pair, diff)
+                            await send_tp_notification(format_expiry_alert(
+                                pair=sig.pair, direction=sig.direction,
+                                timeframe=sig.timeframe, entry=entry,
+                                current_price=cur, unrealized_pips=unrealized,
+                                expiry_hours=expiry_hours,
+                            ))
+                            logger.info(f"[{sig.pair}/{sig.timeframe}] expired after {expiry_hours}h — user notified")
+                            continue
 
-            df = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 50)
-            if df is None or df.empty:
-                continue
-            close = float(df["close"].iloc[-1])
+                df = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 50)
+                if df is None or df.empty:
+                    continue
 
-            hit_target = None
-            hit_price = None
+                # Sweep every candle since the signal reached its current state —
+                # not just the latest bar — so a wick that hit SL/TP between the
+                # previous check and now isn't missed just because price has since
+                # moved away. ACTIVE sweeps from created_at; TP1_HIT sweeps from
+                # hit_at so pre-TP1 candles aren't re-evaluated against TP1_HIT
+                # rules. Both timestamps may come back naive from the DB — treat
+                # naive as UTC, mirroring the expiry check above.
+                start_ts = sig.created_at if sig.status == "ACTIVE" else sig.hit_at
+                if start_ts is not None and start_ts.tzinfo is None:
+                    start_ts = start_ts.replace(tzinfo=timezone.utc)
 
-            if sig.status == "ACTIVE":
-                # Full price ladder check: TP2 > TP1 > SL for LONG
-                if sig.direction == "LONG":
-                    if sig.target2 and close >= sig.target2:
-                        hit_target, hit_price = "TP2", sig.target2
-                    elif sig.target1 and close >= sig.target1:
-                        hit_target, hit_price = "TP1", sig.target1
-                    elif sig.invalidation and close <= sig.invalidation:
-                        hit_target, hit_price = "SL", sig.invalidation
-                else:
-                    if sig.target2 and close <= sig.target2:
-                        hit_target, hit_price = "TP2", sig.target2
-                    elif sig.target1 and close <= sig.target1:
-                        hit_target, hit_price = "TP1", sig.target1
-                    elif sig.invalidation and close >= sig.invalidation:
-                        hit_target, hit_price = "SL", sig.invalidation
+                window_df = _sweep_window(df, start_ts, sig.timeframe)
+                if window_df.empty:
+                    # Signal created only seconds ago — no candle qualifies yet;
+                    # fall back to the latest bar as before.
+                    window_df = df.tail(1)
 
-            elif sig.status == "TP1_HIT":
-                # Already at TP1 — only watching for TP2 or SL
-                if sig.direction == "LONG":
-                    if sig.target2 and close >= sig.target2:
-                        hit_target, hit_price = "TP2", sig.target2
-                    elif sig.invalidation and close <= sig.invalidation:
-                        hit_target, hit_price = "SL_AFTER_TP1", sig.invalidation
-                else:
-                    if sig.target2 and close <= sig.target2:
-                        hit_target, hit_price = "TP2", sig.target2
-                    elif sig.invalidation and close >= sig.invalidation:
-                        hit_target, hit_price = "SL_AFTER_TP1", sig.invalidation
-
-            if not hit_target:
-                continue
-
-            price_diff = (hit_price - entry) if sig.direction == "LONG" else (entry - hit_price)
-            pnl = _calc_pips(sig.pair, price_diff)
-            resolved += 1
-
-            if hit_target == "TP1":
-                # Intermediate win — keep watching for TP2
-                sig.status = "TP1_HIT"
-                sig.hit_target = "TP1"
-                sig.hit_at = now
-                sig.pnl_pips = pnl
-                msg = format_tp_hit_alert(
-                    pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
-                    tp_level="TP1", hit_price=hit_price, entry=entry, pnl_pips=pnl,
-                    target2=sig.target2,
+                candles = list(zip(
+                    window_df["high"].astype(float), window_df["low"].astype(float)
+                ))
+                outcome = _sweep_outcome(
+                    sig.direction, sig.status, candles,
+                    sig.target1, sig.target2, sig.invalidation,
                 )
-                await send_tp_notification(msg)
-                logger.info(f"[{sig.pair}/{sig.timeframe}] TP1 hit @ {hit_price} — watching for TP2")
+                if not outcome:
+                    continue
+                hit_target, hit_price = outcome
 
-            elif hit_target == "TP2":
-                # If TP1 was already banked, blend both legs 50/50 instead of
-                # discarding the TP1 profit in favor of the TP2-leg pnl alone.
-                came_via_tp1 = sig.status == "TP1_HIT"
-                sig.status = "HIT"
-                sig.hit_target = "TP2"
-                sig.hit_at = now
-                sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1) if came_via_tp1 else pnl
-                msg = format_tp_hit_alert(
-                    pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
-                    tp_level="TP2", hit_price=hit_price, entry=entry, pnl_pips=pnl,
+                price_diff = (hit_price - entry) if sig.direction == "LONG" else (entry - hit_price)
+                pnl = _calc_pips(sig.pair, price_diff)
+                resolved += 1
+
+                if hit_target == "TP1":
+                    # Intermediate win — keep watching for TP2
+                    sig.status = "TP1_HIT"
+                    sig.hit_target = "TP1"
+                    sig.hit_at = now
+                    sig.pnl_pips = pnl
+                    msg = format_tp_hit_alert(
+                        pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
+                        tp_level="TP1", hit_price=hit_price, entry=entry, pnl_pips=pnl,
+                        target2=sig.target2,
+                    )
+                    await send_tp_notification(msg)
+                    logger.info(f"[{sig.pair}/{sig.timeframe}] TP1 hit @ {hit_price} — watching for TP2")
+
+                elif hit_target == "TP2":
+                    # If TP1 was already banked, blend both legs 50/50 instead of
+                    # discarding the TP1 profit in favor of the TP2-leg pnl alone.
+                    came_via_tp1 = sig.status == "TP1_HIT"
+                    sig.status = "HIT"
+                    sig.hit_target = "TP2"
+                    sig.hit_at = now
+                    sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1) if came_via_tp1 else pnl
+                    msg = format_tp_hit_alert(
+                        pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
+                        tp_level="TP2", hit_price=hit_price, entry=entry, pnl_pips=pnl,
+                    )
+                    await send_tp_notification(msg)
+                    logger.info(f"[{sig.pair}/{sig.timeframe}] TP2 hit @ {hit_price} — full target reached")
+
+                elif hit_target == "SL":
+                    sig.status = "INVALIDATED"
+                    sig.hit_target = "SL"
+                    sig.hit_at = now
+                    sig.pnl_pips = pnl
+                    logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit @ {hit_price}")
+
+                elif hit_target == "SL_AFTER_TP1":
+                    # TP1 was already banked — blend the banked TP1 leg with the
+                    # SL leg 50/50 and record it as a distinct partial-win outcome
+                    # instead of overwriting pnl_pips with the SL loss alone and
+                    # counting it as a full INVALIDATED loss.
+                    sig.status = "PARTIAL_WIN"
+                    sig.hit_target = "SL_AFTER_TP1"
+                    sig.hit_at = now
+                    sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1)
+                    logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit after TP1 — partial win banked")
+
+            except Exception as e:
+                logger.error(
+                    f"[{sig.pair}/{sig.timeframe}] Error tracking signal id={sig.id}: {e}",
+                    exc_info=True,
                 )
-                await send_tp_notification(msg)
-                logger.info(f"[{sig.pair}/{sig.timeframe}] TP2 hit @ {hit_price} — full target reached")
-
-            elif hit_target == "SL":
-                sig.status = "INVALIDATED"
-                sig.hit_target = "SL"
-                sig.hit_at = now
-                sig.pnl_pips = pnl
-                logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit @ {hit_price}")
-
-            elif hit_target == "SL_AFTER_TP1":
-                # TP1 was already banked — blend the banked TP1 leg with the
-                # SL leg 50/50 and record it as a distinct partial-win outcome
-                # instead of overwriting pnl_pips with the SL loss alone and
-                # counting it as a full INVALIDATED loss.
-                sig.status = "PARTIAL_WIN"
-                sig.hit_target = "SL_AFTER_TP1"
-                sig.hit_at = now
-                sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1)
-                logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit after TP1 — partial win banked")
+                continue
 
         db.commit()
         logger.info(

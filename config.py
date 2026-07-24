@@ -15,6 +15,8 @@ class Settings:
     HTF_TIMEFRAME: str = os.getenv("HTF_TIMEFRAME", "1day")
     LTF_TIMEFRAME: str = os.getenv("LTF_TIMEFRAME", "1h")
     MIN_CONFLUENCE_SCORE: int = int(os.getenv("MIN_CONFLUENCE_SCORE", "3"))
+    DISPLACEMENT_ATR_MULT: float = float(os.getenv("DISPLACEMENT_ATR_MULT", "1.5"))
+    DISPLACEMENT_WINDOW: int = int(os.getenv("DISPLACEMENT_WINDOW", "3"))
     DB_URL: str = os.getenv("DB_URL", "sqlite:///smc_bot.db")
 
 
