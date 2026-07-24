@@ -524,6 +524,35 @@ async def run_scan_now():
     await run_full_scan()
 
 
+def _resolve_outcome(direction: str, status: str, high: float, low: float,
+                     target1, target2, invalidation):
+    """Wick-touch TP/SL resolution for one candle. SL is checked first: when a
+    single bar touches both stop and target, bar data cannot order the touches,
+    so the conservative loss is assumed (spec 2026-07-24 §2.2)."""
+    if direction == "LONG":
+        sl_hit = invalidation is not None and low <= invalidation
+        tp2_hit = target2 is not None and high >= target2
+        tp1_hit = target1 is not None and high >= target1
+    else:
+        sl_hit = invalidation is not None and high >= invalidation
+        tp2_hit = target2 is not None and low <= target2
+        tp1_hit = target1 is not None and low <= target1
+
+    if status == "ACTIVE":
+        if sl_hit:
+            return ("SL", invalidation)
+        if tp2_hit:
+            return ("TP2", target2)
+        if tp1_hit:
+            return ("TP1", target1)
+    elif status == "TP1_HIT":
+        if sl_hit:
+            return ("SL_AFTER_TP1", invalidation)
+        if tp2_hit:
+            return ("TP2", target2)
+    return None
+
+
 async def check_signal_status():
     """Hourly job: resolve active signals against latest price and record outcome.
 
@@ -559,43 +588,16 @@ async def check_signal_status():
             df = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 50)
             if df is None or df.empty:
                 continue
-            close = float(df["close"].iloc[-1])
+            last = df.iloc[-1]
+            high, low = float(last["high"]), float(last["low"])
 
-            hit_target = None
-            hit_price = None
-
-            if sig.status == "ACTIVE":
-                # Full price ladder check: TP2 > TP1 > SL for LONG
-                if sig.direction == "LONG":
-                    if sig.target2 and close >= sig.target2:
-                        hit_target, hit_price = "TP2", sig.target2
-                    elif sig.target1 and close >= sig.target1:
-                        hit_target, hit_price = "TP1", sig.target1
-                    elif sig.invalidation and close <= sig.invalidation:
-                        hit_target, hit_price = "SL", sig.invalidation
-                else:
-                    if sig.target2 and close <= sig.target2:
-                        hit_target, hit_price = "TP2", sig.target2
-                    elif sig.target1 and close <= sig.target1:
-                        hit_target, hit_price = "TP1", sig.target1
-                    elif sig.invalidation and close >= sig.invalidation:
-                        hit_target, hit_price = "SL", sig.invalidation
-
-            elif sig.status == "TP1_HIT":
-                # Already at TP1 — only watching for TP2 or SL
-                if sig.direction == "LONG":
-                    if sig.target2 and close >= sig.target2:
-                        hit_target, hit_price = "TP2", sig.target2
-                    elif sig.invalidation and close <= sig.invalidation:
-                        hit_target, hit_price = "SL_AFTER_TP1", sig.invalidation
-                else:
-                    if sig.target2 and close <= sig.target2:
-                        hit_target, hit_price = "TP2", sig.target2
-                    elif sig.invalidation and close >= sig.invalidation:
-                        hit_target, hit_price = "SL_AFTER_TP1", sig.invalidation
-
-            if not hit_target:
+            outcome = _resolve_outcome(
+                sig.direction, sig.status, high, low,
+                sig.target1, sig.target2, sig.invalidation,
+            )
+            if not outcome:
                 continue
+            hit_target, hit_price = outcome
 
             price_diff = (hit_price - entry) if sig.direction == "LONG" else (entry - hit_price)
             pnl = _calc_pips(sig.pair, price_diff)
