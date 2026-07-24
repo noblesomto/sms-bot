@@ -198,9 +198,9 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
             target1, target2, invalidation = _calc_risk(direction, current_price, ob_at_price, all_levels, pair)
 
             # ── Filter 5: Minimum 2:1 risk/reward ────────────────────────────
-            if not _check_rr(direction, entry_low, entry_high, target1, invalidation, min_rr=2.0):
+            if not _check_rr(direction, current_price, target1, invalidation, min_rr=2.0):
                 logger.info(f"[{pair}/{timeframe}] Skipping {direction} — R:R below 2:1 "
-                            f"(entry={entry_low}-{entry_high} t1={target1} sl={invalidation})")
+                            f"(market={current_price} zone={entry_low}-{entry_high} t1={target1} sl={invalidation})")
                 continue
 
             # ── Filter 6: No conflicting active signal (opposite direction) ───
@@ -219,7 +219,7 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
                 pair=pair, timeframe=timeframe, direction=direction,
                 score=conf["score"], entry_low=entry_low, entry_high=entry_high,
                 target1=target1, target2=target2, invalidation=invalidation,
-                factors=conf["factors"],
+                factors=conf["factors"], entry_price=current_price,
             )
 
             message = format_signal_alert(
@@ -228,7 +228,7 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
                 max_score=conf["max_score"],
                 factors=conf["factors"], entry_low=entry_low, entry_high=entry_high,
                 target1=target1, target2=target2, invalidation=invalidation,
-                wyckoff_context=wyckoff_ctx,
+                wyckoff_context=wyckoff_ctx, entry_price=current_price,
             )
 
             # Re-fetch live candles for the chart — the scan df can be up to a
@@ -270,16 +270,17 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
     return result
 
 
-def _check_rr(direction: str, entry_low: float, entry_high: float,
+def _check_rr(direction: str, entry_price: float,
               target1: float, invalidation: float, min_rr: float = 1.5) -> bool:
-    """Return True only if TP1 distance is at least min_rr × SL distance."""
-    entry_mid = (entry_low + entry_high) / 2
+    """Return True only if TP1 distance is at least min_rr × SL distance,
+    measured from the live market price — the user enters at market on alert,
+    so zone-midpoint R:R overstated reality (spec 2026-07-24 §2.1)."""
     if direction == "LONG":
-        reward = target1 - entry_mid
-        risk = entry_mid - invalidation
+        reward = target1 - entry_price
+        risk = entry_price - invalidation
     else:
-        reward = entry_mid - target1
-        risk = invalidation - entry_mid
+        reward = entry_price - target1
+        risk = invalidation - entry_price
     if risk <= 0 or reward <= 0:
         return False
     return (reward / risk) >= min_rr
@@ -464,10 +465,10 @@ def _calc_pips(pair: str, price_diff: float) -> float:
 def _save_signal(
     pair, timeframe, direction, score,
     entry_low, entry_high, target1, target2, invalidation, factors,
+    entry_price: float,
 ) -> int:
     """Persist a new signal row and return its primary key."""
     prec = price_precision(entry_low)
-    entry_price = round((entry_low + entry_high) / 2, prec)
     db = SessionLocal()
     try:
         sig = Signal(
@@ -480,7 +481,7 @@ def _save_signal(
             invalidation=round(invalidation, prec) if invalidation is not None else None,
             factors_json=json.dumps(factors),
             status="ACTIVE",
-            entry_price=entry_price,
+            entry_price=round(entry_price, prec),
         )
         db.add(sig)
         db.commit()
