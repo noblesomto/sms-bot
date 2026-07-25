@@ -146,6 +146,12 @@ def run_pair(pair: str, base_df: pd.DataFrame, timeframes=("15min", "1h")) -> li
 
     for i in range(WARMUP_BARS, n):
         t_ts = base_df["datetime"].iloc[i]
+        # df["datetime"] is the bar OPEN time; the decision/entry moment is the
+        # bar CLOSE (open + 15m). Kill-zone checks and the expiry deadline are
+        # anchored to the close so they match live semantics (created_at is set
+        # at alert time ≈ bar close). Book bookkeeping stays on the uniform
+        # open-time convention (entry/exit comparisons are self-consistent).
+        t_close = t_ts + timedelta(minutes=15)
 
         # Free positions that have already resolved by this bar's timestamp.
         open_positions = [
@@ -170,7 +176,7 @@ def run_pair(pair: str, base_df: pd.DataFrame, timeframes=("15min", "1h")) -> li
             if scan_view is None:
                 continue   # <200-bar view for this timeframe — skip (binding rule)
 
-            result = evaluate(pair, tf, scan_view, htf_view, itf_view, now=t_ts)
+            result = evaluate(pair, tf, scan_view, htf_view, itf_view, now=t_close)
             sig = result["signal"]
             if not sig:
                 continue
@@ -192,7 +198,7 @@ def run_pair(pair: str, base_df: pd.DataFrame, timeframes=("15min", "1h")) -> li
             trade_seed = {
                 "pair": pair, "timeframe": tf, "direction": direction,
                 "score": sig["score"], "factors": sig["factors"],
-                "entry_ts": t_ts, "entry": entry_price,
+                "entry_ts": t_close, "entry": entry_price,
                 "sl": sig["invalidation"], "tp1": sig["target1"], "tp2": sig["target2"],
             }
             future_bars = base_df.iloc[i + 1:]

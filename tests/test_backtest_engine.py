@@ -209,7 +209,8 @@ def test_warmup_one_bar_past_threshold_fires_once(monkeypatch):
     engine.run_pair(PAIR, base_df, timeframes=("15min",))
     assert len(calls) == 1
     assert calls[0][0] == "15min"
-    assert calls[0][1] == base_df["datetime"].iloc[WARMUP]
+    # evaluate() receives the decision bar's CLOSE as `now`
+    assert calls[0][1] == base_df["datetime"].iloc[WARMUP] + timedelta(minutes=15)
 
 
 def test_1h_timeframe_skipped_until_enough_bars(monkeypatch):
@@ -242,7 +243,8 @@ def test_entry_accounting(monkeypatch):
     assert t["score"] == sig["score"]
     assert t["factors"] == sig["factors"]
     assert t["entry"] == base_df["close"].iloc[entry_idx] == ENTRY_PRICE
-    assert t["entry_ts"] == base_df["datetime"].iloc[entry_idx]
+    # entry_ts is the decision bar's CLOSE (open + 15m) — the actual entry moment
+    assert t["entry_ts"] == base_df["datetime"].iloc[entry_idx] + timedelta(minutes=15)
     assert t["sl"] == SL
     assert t["tp1"] == TP1
     assert t["tp2"] == TP2
