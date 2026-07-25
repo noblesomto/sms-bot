@@ -113,17 +113,30 @@ def _patched_scheduler(db_path: str, alerts_sent: list):
         "is_in_kill_zone": scheduler.is_in_kill_zone,
         "get_current_session": scheduler.get_current_session,
     }
+    # The kill-zone/session call sites moved into core.strategy.evaluate()
+    # during the phase-2 extraction — patch that module's bindings too, or the
+    # replay silently uses real wall-clock sessions and loses determinism.
+    import core.strategy as strategy
+    strategy_originals = {
+        "is_in_kill_zone": strategy.is_in_kill_zone,
+        "get_current_session": strategy.get_current_session,
+    }
+
     scheduler.get_candles = _fake_get_candles
     scheduler.send_alert = fake_send_alert
     scheduler.generate_chart = _fake_generate_chart
     scheduler.SessionLocal = test_session_local
     scheduler.is_in_kill_zone = _fake_is_in_kill_zone
     scheduler.get_current_session = _fake_get_current_session
+    strategy.is_in_kill_zone = _fake_is_in_kill_zone
+    strategy.get_current_session = _fake_get_current_session
     try:
         yield test_session_local
     finally:
         for name, value in originals.items():
             setattr(scheduler, name, value)
+        for name, value in strategy_originals.items():
+            setattr(strategy, name, value)
         engine.dispose()
 
 
