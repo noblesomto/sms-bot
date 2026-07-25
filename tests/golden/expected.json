@@ -1,0 +1,94 @@
+{
+  "runs": [
+    {
+      "pair": "XAU/USD",
+      "timeframe": "15min",
+      "result": {
+        "pair": "XAU/USD",
+        "timeframe": "15min",
+        "candles_fetched": 200,
+        "signals_found": 0,
+        "error": null
+      }
+    },
+    {
+      "pair": "XAU/USD",
+      "timeframe": "1h",
+      "result": {
+        "pair": "XAU/USD",
+        "timeframe": "1h",
+        "candles_fetched": 200,
+        "signals_found": 0,
+        "error": null
+      }
+    },
+    {
+      "pair": "EUR/USD",
+      "timeframe": "15min",
+      "result": {
+        "pair": "EUR/USD",
+        "timeframe": "15min",
+        "candles_fetched": 200,
+        "signals_found": 0,
+        "error": null
+      }
+    },
+    {
+      "pair": "EUR/USD",
+      "timeframe": "1h",
+      "result": {
+        "pair": "EUR/USD",
+        "timeframe": "1h",
+        "candles_fetched": 200,
+        "signals_found": 0,
+        "error": null
+      }
+    },
+    {
+      "pair": "GBP/JPY",
+      "timeframe": "15min",
+      "result": {
+        "pair": "GBP/JPY",
+        "timeframe": "15min",
+        "candles_fetched": 200,
+        "signals_found": 0,
+        "error": null
+      }
+    },
+    {
+      "pair": "GBP/JPY",
+      "timeframe": "1h",
+      "result": {
+        "pair": "GBP/JPY",
+        "timeframe": "1h",
+        "candles_fetched": 200,
+        "signals_found": 0,
+        "error": null
+      }
+    },
+    {
+      "pair": "US30",
+      "timeframe": "15min",
+      "result": {
+        "pair": "US30",
+        "timeframe": "15min",
+        "candles_fetched": 200,
+        "signals_found": 0,
+        "error": null
+      }
+    },
+    {
+      "pair": "US30",
+      "timeframe": "1h",
+      "result": {
+        "pair": "US30",
+        "timeframe": "1h",
+        "candles_fetched": 200,
+        "signals_found": 0,
+        "error": null
+      }
+    }
+  ],
+  "signals": [],
+  "alerts_sent_count": 0
+}
