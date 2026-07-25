@@ -1,0 +1,348 @@
+"""Pure signal-decision logic for the SMC scanner.
+
+`evaluate()` is the analysis-and-decision core of the scan pipeline: given
+already-fetched candles for the scan timeframe (and, where applicable, the
+4H HTF and 1H ITF), it runs structure/OB/FVG/liquidity/Wyckoff analysis,
+builds a candidate direction, scores confluence, and applies filters 1-5
+(kill zone, HTF bias, ITF bias, Draw on Liquidity, OB rejection) plus the
+minimum risk/reward filter — returning a decision dict and everything the
+caller needs for alerting/charting.
+
+It performs no IO and touches no DB/session/alert/chart state — the caller
+(scheduler.scan_pair_timeframe) is responsible for fetching candles, running
+Filters 6/7 (duplicate/conflicting active-signal checks against the DB),
+persisting the signal, sending the alert, and generating the chart.
+"""
+import logging
+
+import pandas as pd
+
+from config import settings
+from core.precision import price_precision
+from core.structure import analyze_structure
+from core.order_blocks import find_order_blocks, validate_obs, get_price_at_ob
+from core.fvg import scan_fvgs, update_fvg_status, get_fvg_at_price
+from core.liquidity import find_equal_highs_lows, get_previous_day_week_levels, detect_liquidity_sweeps
+from core.sessions import is_in_kill_zone, get_current_session
+from core.premium_discount import get_premium_discount_zones
+from core.confluence import score_signal
+from core.wyckoff import get_wyckoff_context
+
+logger = logging.getLogger(__name__)
+
+# Discard OBs that are too old — stale OBs have likely been tested and weakened.
+# Age = candles since the OB formed. ICT OBs remain valid much longer than
+# previously set; the tight windows (5h on 15min, 15h on 1H) were wiping out
+# all OBs and silently blocking every signal.
+_OB_MAX_AGE = {"5min": 30, "15min": 96, "1h": 72}  # 5min=2.5h, 15min=24h, 1h=3d
+
+
+def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -> dict:
+    """Run structure/confluence analysis and the signal-decision filters.
+
+    Args:
+        pair: e.g. "XAU/USD"
+        timeframe: scan timeframe, e.g. "15min"
+        df: scan-TF candles (200 bars)
+        htf_df: 4H candles, or None
+        itf_df: 1H candles (only meaningful for 5min/15min scans), or None
+        now: aware UTC datetime used for every kill-zone/session decision
+
+    Returns:
+        {"signal": None | {direction, score, max_score, factors, entry_low,
+         entry_high, target1, target2, invalidation, entry_price, kz_name,
+         session}, "analysis": {obs, fvgs, all_levels, structure, wyckoff_ctx, df}}
+    """
+    structure = analyze_structure(df)
+    df = structure["df"]
+
+    htf_bias = "RANGING"
+    if htf_df is not None and not htf_df.empty:
+        htf_bias = analyze_structure(htf_df)["trend_bias"]
+
+    # 1H intermediate bias for scalp TF entries (5min/15min must align with 1H)
+    itf_bias = "RANGING"
+    if timeframe in ("5min", "15min") and itf_df is not None and not itf_df.empty:
+        itf_bias = analyze_structure(itf_df)["trend_bias"]
+
+    obs = validate_obs(df, find_order_blocks(df, structure["bos_events"]))
+    max_ob_age = _OB_MAX_AGE.get(timeframe, 72)
+    obs = [ob for ob in obs if (len(df) - 1 - ob.get("candle_index", 0)) <= max_ob_age]
+
+    fvgs = update_fvg_status(df, scan_fvgs(df))
+
+    eq_levels = find_equal_highs_lows(df)
+    pd_levels = get_previous_day_week_levels(df)
+    all_levels = {**eq_levels, **pd_levels}
+    sweeps = detect_liquidity_sweeps(df, all_levels)
+
+    in_kz, kz_name = is_in_kill_zone(dt=now)
+    session = get_current_session(dt=now)
+    # Use HTF range for premium/discount — the 50% EQ on a 5min range is meaningless;
+    # ICT premium/discount is defined by the HTF (4H) swing, not the scalp window.
+    pd_zone = get_premium_discount_zones(
+        htf_df if htf_df is not None and not htf_df.empty else df
+    )
+
+    current_price = float(df["close"].iloc[-1])
+    ob_at_price = get_price_at_ob(obs, current_price)
+    fvg_at_price = get_fvg_at_price(fvgs, current_price)
+    last_choch = structure["last_choch"]
+    wyckoff_ctx = get_wyckoff_context(df, ob_at_price)
+    if wyckoff_ctx.get("key_event"):
+        logger.info(
+            f"[{pair}/{timeframe}] Wyckoff: {wyckoff_ctx['description']} "
+            f"(confidence={wyckoff_ctx['confidence']})"
+        )
+
+    analysis = {
+        "obs": obs, "fvgs": fvgs, "all_levels": all_levels,
+        "structure": structure, "wyckoff_ctx": wyckoff_ctx, "df": df,
+    }
+
+    # Determine candidate signal directions
+    candidates = []
+    if ob_at_price:
+        candidates.append("LONG" if ob_at_price["direction"] == "BULLISH" else "SHORT")
+    elif structure["trend_bias"] == "BULLISH":
+        candidates.append("LONG")
+    elif structure["trend_bias"] == "BEARISH":
+        candidates.append("SHORT")
+
+    if not candidates:
+        logger.debug(f"[{pair}/{timeframe}] No signal candidate — price not at any OB, "
+                     f"trend={structure['trend_bias']}, OBs={len(obs)}")
+
+    for direction in candidates:
+        conf = score_signal(
+            direction=direction,
+            htf_bias=htf_bias,
+            ob_at_price=ob_at_price,
+            fvg_at_price=fvg_at_price,
+            liquidity_sweeps=sweeps,
+            in_kill_zone=in_kz,
+            pd_zone=pd_zone,
+            ltf_choch=last_choch,
+            wyckoff_context=wyckoff_ctx,
+        )
+
+        if conf["score"] < settings.MIN_CONFLUENCE_SCORE:
+            logger.info(f"[{pair}/{timeframe}] Score {conf['score']}/{conf['max_score']} "
+                        f"below threshold {settings.MIN_CONFLUENCE_SCORE} — "
+                        f"factors: {', '.join(conf['factors'])}")
+            continue
+
+        # ── Filter 1: Kill zone enforcement (5min/15min only) ────────────
+        # 1H signals can fire any time; scalp TFs only during institutional windows.
+        if timeframe in ("5min", "15min") and not in_kz:
+            logger.info(f"[{pair}/{timeframe}] Skipping {direction} — outside kill zone")
+            continue
+
+        # ── Filter 2: HTF bias alignment (4H) ────────────────────────────
+        if htf_bias == "BULLISH" and direction == "SHORT":
+            logger.info(f"[{pair}/{timeframe}] Skipping SHORT — 4H bias is BULLISH")
+            continue
+        if htf_bias == "BEARISH" and direction == "LONG":
+            logger.info(f"[{pair}/{timeframe}] Skipping LONG — 4H bias is BEARISH")
+            continue
+
+        # ── Filter 3: Intermediate TF alignment (1H for 5min/15min) ──────
+        if timeframe in ("5min", "15min"):
+            if itf_bias == "BULLISH" and direction == "SHORT":
+                logger.info(f"[{pair}/{timeframe}] Skipping SHORT — 1H bias is BULLISH")
+                continue
+            if itf_bias == "BEARISH" and direction == "LONG":
+                logger.info(f"[{pair}/{timeframe}] Skipping LONG — 1H bias is BEARISH")
+                continue
+
+        # ── Filter 4: Draw on Liquidity must exist in trade direction ─────
+        if not _has_dol(direction, current_price, all_levels):
+            logger.info(f"[{pair}/{timeframe}] Skipping {direction} — no clear Draw on Liquidity")
+            continue
+
+        # ── Filter 5: OB rejection confirmation ──────────────────────────
+        # When price is inside an OB, require a wick or body rejection before
+        # alerting — entering the moment price touches the OB risks the break.
+        if ob_at_price and not _has_ob_rejection(df, direction, ob_at_price):
+            logger.info(f"[{pair}/{timeframe}] Skipping {direction} — price in OB but no rejection yet")
+            continue
+
+        prec = price_precision(current_price)
+        entry_low = ob_at_price["ob_low"] if ob_at_price else round(current_price * 0.999, prec)
+        entry_high = ob_at_price["ob_high"] if ob_at_price else round(current_price * 1.001, prec)
+        target1, target2, invalidation = _calc_risk(direction, current_price, ob_at_price, all_levels, pair)
+
+        # ── Filter 5: Minimum 2:1 risk/reward ────────────────────────────
+        if not _check_rr(direction, current_price, target1, invalidation, min_rr=2.0):
+            logger.info(f"[{pair}/{timeframe}] Skipping {direction} — R:R below 2:1 "
+                        f"(market={current_price} zone={entry_low}-{entry_high} t1={target1} sl={invalidation})")
+            continue
+
+        return {
+            "signal": {
+                "direction": direction,
+                "score": conf["score"],
+                "max_score": conf["max_score"],
+                "factors": conf["factors"],
+                "entry_low": entry_low,
+                "entry_high": entry_high,
+                "target1": target1,
+                "target2": target2,
+                "invalidation": invalidation,
+                "entry_price": current_price,
+                "kz_name": kz_name,
+                "session": session,
+            },
+            "analysis": analysis,
+        }
+
+    return {"signal": None, "analysis": analysis}
+
+
+def _check_rr(direction: str, entry_price: float,
+              target1: float, invalidation: float, min_rr: float = 1.5) -> bool:
+    """Return True only if TP1 distance is at least min_rr × SL distance,
+    measured from the live market price — the user enters at market on alert,
+    so zone-midpoint R:R overstated reality (spec 2026-07-24 §2.1)."""
+    if direction == "LONG":
+        reward = target1 - entry_price
+        risk = entry_price - invalidation
+    else:
+        reward = entry_price - target1
+        risk = invalidation - entry_price
+    if risk <= 0 or reward <= 0:
+        return False
+    return (reward / risk) >= min_rr
+
+
+def _has_ob_rejection(df: pd.DataFrame, direction: str, ob: dict) -> bool:
+    """Return True if the last 3 candles show a rejection wick or body at the OB boundary.
+
+    For LONG (bullish OB):
+      - Lower wick ≥ 30% of candle range, touching the OB zone, OR
+      - Bullish candle that opened/touched below OB midpoint and closed above it.
+    For SHORT (bearish OB): mirror of above.
+    The check catches both wick rejections (pin bars) and body rejections (engulfing).
+    """
+    if not ob:
+        return True  # No OB = fallback entry zone, skip rejection requirement
+
+    ob_mid = ob["ob_mid"]
+    ob_lo = ob["ob_low"]
+    ob_hi = ob["ob_high"]
+    recent = df.tail(3)
+
+    for _, c in recent.iterrows():
+        hi, lo = float(c["high"]), float(c["low"])
+        op, cl = float(c["open"]), float(c["close"])
+        total = hi - lo
+        if total <= 0:
+            continue
+
+        if direction == "LONG":
+            if lo > ob_hi or hi < ob_lo:
+                continue          # candle not touching OB at all
+            lower_wick = min(op, cl) - lo
+            if lower_wick / total >= 0.30:
+                return True       # wick rejection: price tried lower, was rejected
+            if cl > op and lo <= ob_mid and cl >= ob_mid:
+                return True       # body rejection: bullish close through OB midpoint
+        else:
+            if hi < ob_lo or lo > ob_hi:
+                continue
+            upper_wick = hi - max(op, cl)
+            if upper_wick / total >= 0.30:
+                return True
+            if cl < op and hi >= ob_mid and cl <= ob_mid:
+                return True
+
+    return False
+
+
+def _has_dol(direction: str, price: float, levels: dict) -> bool:
+    """Return True if a clear Draw on Liquidity pool exists within 5% in the trade direction.
+
+    ICT requires a known liquidity target (EQH/EQL cluster, PDH/PDL, PWH/PWL) before
+    entering — without a target to draw to, the trade has no directional purpose.
+    """
+    if direction == "LONG":
+        eqh = [l for l in (levels.get("eqh_levels") or []) if price < l <= price * 1.05]
+        pdh = levels.get("pdh")
+        pwh = levels.get("pwh")
+        return (
+            bool(eqh)
+            or (pdh and price < pdh <= price * 1.05)
+            or (pwh and price < pwh <= price * 1.05)
+        )
+    else:
+        eql = [l for l in (levels.get("eql_levels") or []) if price * 0.95 <= l < price]
+        pdl = levels.get("pdl")
+        pwl = levels.get("pwl")
+        return (
+            bool(eql)
+            or (pdl and price * 0.95 <= pdl < price)
+            or (pwl and price * 0.95 <= pwl < price)
+        )
+
+
+def _min_sl_buffer(price: float) -> float:
+    """Minimum SL buffer in price units to protect against stop hunts below the OB."""
+    if price >= 10000:  # NAS100 (~30k), US30 (~52k): 10 points
+        return 10.0
+    if price >= 1000:   # XAU/USD: $0.50
+        return 0.50
+    if price >= 100:    # USD/JPY, XAG/USD: 5 pips
+        return 0.05
+    return 0.00050      # EUR/USD, GBP/USD: 5 pips
+
+
+def _max_sl_distance(pair: str, price: float) -> float:
+    """Hard cap on SL distance from entry — prevents oversized risk on wide OBs."""
+    if pair == "NAS100":  return 50.0    # 50 index points
+    if pair == "US30":    return 80.0    # 80 index points
+    if "XAU" in pair:     return 8.0     # $8 = 80 gold pips
+    if "XAG" in pair:     return 0.40    # $0.40 = 4 silver pips
+    if "JPY" in pair:     return 0.25    # 25 JPY pips
+    return 0.0020                        # 20 forex pips
+
+
+def _calc_risk(direction: str, price: float, ob: dict, levels: dict, pair: str = "") -> tuple:
+    """Derive Target 1, Target 2, and Invalidation from nearby liquidity levels.
+
+    SL is placed just beyond the OB boundary (5% of OB range, min buffer per
+    instrument). The stop is never pulled inside the OB to satisfy a risk cap —
+    a stop inside the zone gets hit by normal mitigation of the very structure
+    the entry is based on. When there is no OB, `_max_sl_distance` provides the
+    fallback stop distance from the current price.
+    """
+    prec = price_precision(price)
+    max_dist = _max_sl_distance(pair, price)
+
+    if direction == "LONG":
+        # Pool all upside liquidity targets, sort ascending (nearest first)
+        eqh = [l for l in (levels.get("eqh_levels") or []) if l > price]
+        pdh = levels.get("pdh")
+        pwh = levels.get("pwh")
+        candidates = sorted({l for l in eqh + [pdh, pwh] if l and l > price})
+        t1 = candidates[0] if candidates else round(price * 1.010, prec)
+        t2 = candidates[1] if len(candidates) > 1 else round(t1 * 1.010, prec)
+        if ob:
+            buf = max((ob["ob_high"] - ob["ob_low"]) * 0.05, _min_sl_buffer(price))
+            inv = round(ob["ob_low"] - buf, prec)
+        else:
+            inv = round(price - max_dist, prec)
+    else:
+        # Pool all downside liquidity targets, sort descending (nearest first)
+        eql = [l for l in (levels.get("eql_levels") or []) if l < price]
+        pdl = levels.get("pdl")
+        pwl = levels.get("pwl")
+        candidates = sorted({l for l in eql + [pdl, pwl] if l and l < price}, reverse=True)
+        t1 = candidates[0] if candidates else round(price * 0.990, prec)
+        t2 = candidates[1] if len(candidates) > 1 else round(t1 * 0.990, prec)
+        if ob:
+            buf = max((ob["ob_high"] - ob["ob_low"]) * 0.05, _min_sl_buffer(price))
+            inv = round(ob["ob_high"] + buf, prec)
+        else:
+            inv = round(price + max_dist, prec)
+
+    return round(t1, prec), round(t2, prec), round(inv, prec)
