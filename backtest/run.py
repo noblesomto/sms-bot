@@ -109,6 +109,11 @@ def main(argv=None) -> int:
         print(f"[{pair}] done: {len(trades)} trades in {elapsed:.1f}s", flush=True)
         all_trades.extend(trades)
 
+    # Each pair's trades are chronological on their own, but concatenation
+    # across pairs isn't — summarize()/factor_edge() require entry_ts order
+    # for max_drawdown_pips to reflect a real historical equity curve.
+    all_trades.sort(key=lambda t: t["entry_ts"])
+
     summary = summarize(all_trades)
     rows = factor_edge(all_trades)
     print(render_text(summary, rows))
