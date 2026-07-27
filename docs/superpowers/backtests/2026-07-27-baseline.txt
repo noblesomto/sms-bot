@@ -1,0 +1,69 @@
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          38
+  wins:            9
+  win rate:        23.7%
+  expectancy:      -4.15 pips
+  profit factor:   0.91
+  max drawdown:    1028.70 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+EUR/JPY            2     1    50.0%      -9.85     0.20      24.60
+GBP/CAD            1     1   100.0%      26.80      inf       0.00
+GBP/USD            1     0     0.0%     -20.00     0.00      20.00
+NAS100            12     2    16.7%     -30.27     0.37     411.60
+US30              16     3    18.8%      12.81     1.19     673.20
+USD/CAD            1     0     0.0%     -12.10     0.00      12.10
+XAG/USD            5     2    40.0%       5.16     2.94       8.00
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+15min             13     6    46.2%      31.72     2.00     159.00
+1h                25     3    12.0%     -22.80     0.57     994.80
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+LONG              16     1     6.2%     -53.44     0.02     874.00
+SHORT             22     8    36.4%      31.70     1.81     514.70
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+6                 24     7    29.2%      17.75     1.45     641.90
+7                 10     1    10.0%     -58.94     0.03     608.40
+8                  4     1    25.0%       1.45     1.03     180.00
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+HTF BEARISH bias aligns with SHORT signal       8    50.0%   106.55    16.7%   -33.67   140.22
+UTAD tested                       14    35.7%    52.64    16.7%   -37.27    89.92
+Wyckoff Distribution Phase C — UTAD confirmed      16    31.2%    36.06    18.2%   -33.39    69.45
+In kill zone                      26    30.8%     6.40     8.3%   -27.01    33.41
+CHoCH confirmed on LTF            13    23.1%    17.27    24.0%   -15.28    32.55
+Premium zone                      13    38.5%    16.13    16.0%   -14.69    30.82
+Buy-side liquidity swept          19    31.6%     9.97    15.8%   -18.27    28.24
+Price at Bearish OB                7    42.9%     4.70    19.4%    -6.15    10.85
+FVG present in zone               15    20.0%    -0.52    26.1%    -6.51     5.99
+Price at Bullish OB                3     0.0%   -49.80    25.7%    -0.23   -49.57
+Wyckoff Accumulation Phase C — Spring confirmed      10    10.0%   -52.10    28.6%    12.98   -65.08
+Spring tested                      7     0.0%   -58.57    29.0%     8.14   -66.71
+HTF BULLISH bias aligns with LONG signal       5     0.0%   -65.70    27.3%     5.18   -70.88
+Discount zone                     13     7.7%   -52.81    32.0%    21.16   -73.96
+Sell-side liquidity swept         15     6.7%   -53.67    34.8%    28.15   -81.81
+OB+FVG confluence zone             4     0.0%   -79.33    26.5%     4.70   -84.02
+UTAD at Bearish OB — ICT+Wyckoff confluence       1     0.0%   -87.50    24.3%    -1.89   -85.61

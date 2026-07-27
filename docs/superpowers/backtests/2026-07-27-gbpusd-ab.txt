@@ -1,0 +1,101 @@
+[GBP/USD] fetching candles once (frozen for both variants)...
+[GBP/USD] 3978 15m bars, 2026-05-28 11:30:00+00:00 -> 2026-07-27 11:15:00+00:00
+
+[GBP/USD] running variant A (all 3 fixes ON)...
+[GBP/USD] fixed: 0 trades in 1120.0s
+
+[GBP/USD] running variant B (all 3 fixes OFF / original)...
+[GBP/USD] original: 0 trades in 1113.1s
+
+======================================================================
+[GBP/USD] VARIANT A — all 3 fixes ON (current code)
+======================================================================
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          0
+  wins:            0
+  win rate:        0.0%
+  expectancy:      0.00 pips
+  profit factor:   0.00
+  max drawdown:    0.00 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+
+======================================================================
+[GBP/USD] VARIANT B — original (all 3 fixes OFF)
+======================================================================
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          0
+  wins:            0
+  win rate:        0.0%
+  expectancy:      0.00 pips
+  profit factor:   0.00
+  max drawdown:    0.00 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+
+======================================================================
+[GBP/USD] DIFF — trades present in original but removed by the fixes
+======================================================================
+
+======================================================================
+[GBP/USD] DIFF — trades present in fixed but not in original
+======================================================================
+  (identical trade sets — fixes never mattered for this pair in this window)

@@ -235,3 +235,18 @@ Priority tuning candidates, in order:
   this instant use zone-mid entries and close-based outcomes; rows after it
   use market-at-alert entries and wick-swept outcomes. Cross-era PnL
   comparisons are invalid.
+- **2026-07-27 13:18 UTC — Phase 2 tuning: HTF momentum veto + Wyckoff
+  Spring/UTAD confirmation tightening deployed to production.** Root cause
+  and backtest evidence: `docs/superpowers/backtests/2026-07-27-root-cause-
+  analysis.md`, `2026-07-27-fix3-spring-tightening.md`. Frozen-data A/B
+  validated on XAU/USD (expectancy -7.19→+13.71 pips, PF 0.89→1.20, maxDD
+  804→404) and NAS100 (expectancy -30.27→-16.98 pips, PF 0.37→0.65, maxDD
+  412→238); GBP/USD and USD/JPY had 0 signals either way in the 60d test
+  window (no evidence for/against). A third fix (Filter 8 SL cooldown) was
+  implemented, validated on XAU/USD, then reverted the same day before this
+  deploy after broader testing exposed it blocking a legitimate improved
+  re-entry on NAS100 — see `2026-07-27-fix2-sl-cooldown-REVERTED.md`; not
+  part of this deploy. Files changed: `core/strategy.py`,
+  `core/wyckoff.py`. Deploy verified: clean restart (0 crashes), full
+  42-combo scan cycle completed without error, `/health` OK.
+  **+2-week live comparison due 2026-08-10.**

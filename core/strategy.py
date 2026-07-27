@@ -36,6 +36,22 @@ logger = logging.getLogger(__name__)
 # all OBs and silently blocking every signal.
 _OB_MAX_AGE = {"5min": 30, "15min": 96, "1h": 72}  # 5min=2.5h, 15min=24h, 1h=3d
 
+# Secondary veto for Filter 2 when the 4H swing-based trend_bias reads
+# RANGING. get_trend_bias() only looks at the last 2 confirmed swing highs/
+# lows and needs both to agree, so a real multi-day trend with a mixed swing
+# pattern (common) is misread as RANGING, letting counter-trend entries
+# through Filter 2 unopposed — root cause confirmed in the 2026-07-27
+# backtest (docs/superpowers/backtests/2026-07-27-root-cause-analysis.md).
+# Net close-to-close change over a longer window catches what the swing
+# classifier misses without touching its semantics elsewhere (it's still
+# used unchanged for OB validation, scoring, ITF checks, etc.). Threshold is
+# deliberately wide so a genuine basing/accumulation range (net move small)
+# still reads as "no conflict" and doesn't block legitimate Wyckoff
+# Spring/UTAD entries, which are supposed to fire during exactly that
+# condition.
+_RANGING_MOMENTUM_LOOKBACK = 20   # 4H candles (~3.3 days)
+_RANGING_MOMENTUM_PCT = 0.02      # 2% net move counts as a real hidden trend
+
 
 def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -> dict:
     """Run structure/confluence analysis and the signal-decision filters.
@@ -144,6 +160,10 @@ def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -
             continue
         if htf_bias == "BEARISH" and direction == "LONG":
             logger.info(f"[{pair}/{timeframe}] Skipping LONG — 4H bias is BEARISH")
+            continue
+        if htf_bias == "RANGING" and _htf_momentum_conflicts(direction, htf_df):
+            logger.info(f"[{pair}/{timeframe}] Skipping {direction} — 4H bias reads RANGING "
+                        f"but net momentum conflicts (missed hidden trend)")
             continue
 
         # ── Filter 3: Intermediate TF alignment (1H for 5min/15min) ──────
@@ -256,6 +276,32 @@ def _has_ob_rejection(df: pd.DataFrame, direction: str, ob: dict) -> bool:
             if cl < op and hi >= ob_mid and cl <= ob_mid:
                 return True
 
+    return False
+
+
+def _htf_momentum_conflicts(direction: str, htf_df) -> bool:
+    """Return True if raw net price change over `_RANGING_MOMENTUM_LOOKBACK`
+    HTF candles clearly opposes `direction`, by at least `_RANGING_MOMENTUM_PCT`.
+
+    Only meaningful (and only called) when `get_trend_bias()` already read
+    RANGING for this HTF view — see the constants' docstring above for why.
+    Fails open (returns False, i.e. no conflict) when there isn't enough
+    history to judge, so it never blocks a signal it can't evaluate.
+    """
+    if htf_df is None or len(htf_df) < _RANGING_MOMENTUM_LOOKBACK + 1:
+        return False
+
+    window = htf_df.tail(_RANGING_MOMENTUM_LOOKBACK + 1)
+    start = float(window["close"].iloc[0])
+    end = float(window["close"].iloc[-1])
+    if start <= 0:
+        return False
+
+    pct = (end - start) / start
+    if direction == "LONG" and pct <= -_RANGING_MOMENTUM_PCT:
+        return True
+    if direction == "SHORT" and pct >= _RANGING_MOMENTUM_PCT:
+        return True
     return False
 
 

@@ -1,0 +1,101 @@
+[USD/JPY] fetching candles once (frozen for both variants)...
+[USD/JPY] 3966 15m bars, 2026-05-28 11:30:00+00:00 -> 2026-07-27 11:15:00+00:00
+
+[USD/JPY] running variant A (all 3 fixes ON)...
+[USD/JPY] fixed: 0 trades in 1075.2s
+
+[USD/JPY] running variant B (all 3 fixes OFF / original)...
+[USD/JPY] original: 0 trades in 1073.5s
+
+======================================================================
+[USD/JPY] VARIANT A — all 3 fixes ON (current code)
+======================================================================
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          0
+  wins:            0
+  win rate:        0.0%
+  expectancy:      0.00 pips
+  profit factor:   0.00
+  max drawdown:    0.00 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+
+======================================================================
+[USD/JPY] VARIANT B — original (all 3 fixes OFF)
+======================================================================
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          0
+  wins:            0
+  win rate:        0.0%
+  expectancy:      0.00 pips
+  profit factor:   0.00
+  max drawdown:    0.00 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+
+======================================================================
+[USD/JPY] DIFF — trades present in original but removed by the fixes
+======================================================================
+
+======================================================================
+[USD/JPY] DIFF — trades present in fixed but not in original
+======================================================================
+  (identical trade sets — fixes never mattered for this pair in this window)

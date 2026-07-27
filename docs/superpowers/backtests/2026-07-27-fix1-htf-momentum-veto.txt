@@ -1,0 +1,126 @@
+Backtesting 14 pair(s): XAU/USD, XAG/USD, NAS100, US30, EUR/USD, GBP/USD, USD/JPY, EUR/JPY, GBP/JPY, AUD/USD, USD/CAD, AUD/JPY, GBP/CAD, EUR/CAD | timeframes=['15min', '1h'] | days=60
+[XAU/USD] fetching candles...
+[XAU/USD] running engine over 3728 15m bars...
+[XAU/USD] done: 13 trades in 1074.5s
+[XAG/USD] fetching candles...
+[XAG/USD] running engine over 3728 15m bars...
+[XAG/USD] done: 2 trades in 1179.9s
+[NAS100] fetching candles...
+[NAS100] running engine over 3728 15m bars...
+[NAS100] done: 10 trades in 1092.3s
+[US30] fetching candles...
+[US30] running engine over 3728 15m bars...
+[US30] done: 16 trades in 992.1s
+[EUR/USD] fetching candles...
+[EUR/USD] running engine over 3978 15m bars...
+[EUR/USD] done: 0 trades in 991.7s
+[GBP/USD] fetching candles...
+[GBP/USD] running engine over 3978 15m bars...
+[GBP/USD] done: 0 trades in 982.4s
+[USD/JPY] fetching candles...
+[USD/JPY] running engine over 3966 15m bars...
+[USD/JPY] done: 0 trades in 1491.5s
+[EUR/JPY] fetching candles...
+[EUR/JPY] running engine over 3979 15m bars...
+[EUR/JPY] done: 2 trades in 1822.0s
+[GBP/JPY] fetching candles...
+[GBP/JPY] running engine over 3979 15m bars...
+[GBP/JPY] done: 0 trades in 6089.0s
+[AUD/USD] fetching candles...
+[AUD/USD] running engine over 3979 15m bars...
+[AUD/USD] done: 0 trades in 1458.8s
+[USD/CAD] fetching candles...
+[USD/CAD] running engine over 3977 15m bars...
+[USD/CAD] done: 1 trades in 1035.8s
+[AUD/JPY] fetching candles...
+[AUD/JPY] running engine over 3978 15m bars...
+[AUD/JPY] done: 0 trades in 995.3s
+[GBP/CAD] fetching candles...
+$GBPCAD=X: possibly delisted; no price data found  (period=60d)
+yfinance: no data returned for GBP/CAD/15min (symbol=GBPCAD=X)
+[2026-07-27 07:55:35.012435+00:00] yfinance failed for GBP/CAD/15min — falling back to Twelve Data
+TwelveData fetch error GBP/CAD/15min attempt 1/3: HTTPError: 400 Client Error: Bad Request for url: https://api.twelvedata.com/time_series?symbol=GBP%2FCAD&interval=15min&outputsize=10000&apikey=aad4f99b620e4817bf048b2a178967b9&timezone=UTC&format=JSON
+TwelveData fetch error GBP/CAD/15min attempt 2/3: HTTPError: 400 Client Error: Bad Request for url: https://api.twelvedata.com/time_series?symbol=GBP%2FCAD&interval=15min&outputsize=10000&apikey=aad4f99b620e4817bf048b2a178967b9&timezone=UTC&format=JSON
+TwelveData fetch error GBP/CAD/15min attempt 3/3: HTTPError: 400 Client Error: Bad Request for url: https://api.twelvedata.com/time_series?symbol=GBP%2FCAD&interval=15min&outputsize=10000&apikey=aad4f99b620e4817bf048b2a178967b9&timezone=UTC&format=JSON
+TwelveData failed for GBP/CAD/15min after 3 attempts
+[2026-07-27 07:56:01.029226+00:00] Both yfinance and TwelveData failed for GBP/CAD/15min — skipping this scan cycle
+[GBP/CAD] no data available, skipping
+[EUR/CAD] fetching candles...
+$EURCAD=X: possibly delisted; no price data found  (period=60d)
+yfinance: no data returned for EUR/CAD/15min (symbol=EURCAD=X)
+[2026-07-27 07:56:11.032344+00:00] yfinance failed for EUR/CAD/15min — falling back to Twelve Data
+TwelveData fetch error EUR/CAD/15min attempt 1/3: HTTPError: 400 Client Error: Bad Request for url: https://api.twelvedata.com/time_series?symbol=EUR%2FCAD&interval=15min&outputsize=10000&apikey=aad4f99b620e4817bf048b2a178967b9&timezone=UTC&format=JSON
+TwelveData fetch error EUR/CAD/15min attempt 2/3: HTTPError: 400 Client Error: Bad Request for url: https://api.twelvedata.com/time_series?symbol=EUR%2FCAD&interval=15min&outputsize=10000&apikey=aad4f99b620e4817bf048b2a178967b9&timezone=UTC&format=JSON
+TwelveData fetch error EUR/CAD/15min attempt 3/3: HTTPError: 400 Client Error: Bad Request for url: https://api.twelvedata.com/time_series?symbol=EUR%2FCAD&interval=15min&outputsize=10000&apikey=aad4f99b620e4817bf048b2a178967b9&timezone=UTC&format=JSON
+TwelveData failed for EUR/CAD/15min after 3 attempts
+[2026-07-27 07:56:26.817427+00:00] Both yfinance and TwelveData failed for EUR/CAD/15min — skipping this scan cycle
+[EUR/CAD] no data available, skipping
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          44
+  wins:            9
+  win rate:        20.5%
+  expectancy:      -3.86 pips
+  profit factor:   0.93
+  max drawdown:    1374.40 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+EUR/JPY            2     1    50.0%      -9.85     0.20      24.60
+NAS100            10     2    20.0%     -26.33     0.45     311.60
+US30              16     3    18.8%      12.81     1.19     673.20
+USD/CAD            1     0     0.0%     -12.10     0.00      12.10
+XAG/USD            2     1    50.0%       6.85     3.58       5.30
+XAU/USD           13     2    15.4%      -7.19     0.89     804.00
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+15min             13     5    38.5%      32.31     1.74     180.00
+1h                31     4    12.9%     -19.03     0.69    1379.80
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+LONG              24     1     4.2%     -67.46     0.01    1638.00
+SHORT             20     8    40.0%      72.45     2.71     420.00
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+6                 25     6    24.0%       8.54     1.16     646.90
+7                 13     2    15.4%     -15.34     0.75     462.10
+8                  6     1    16.7%     -30.70     0.50     370.00
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+UTAD at Bearish OB — ICT+Wyckoff confluence       2    50.0%   246.25    19.0%   -15.77   262.02
+HTF BEARISH bias aligns with SHORT signal       9    55.6%   159.16    11.4%   -45.78   204.94
+Wyckoff Distribution Phase C — UTAD confirmed      15    40.0%    90.36    10.3%   -52.60   142.96
+UTAD tested                       12    41.7%    77.95    12.5%   -34.54   112.49
+Price at Bearish OB                7    42.9%    83.73    16.2%   -20.44   104.16
+CHoCH confirmed on LTF            17    23.5%    32.97    18.5%   -27.06    60.03
+Premium zone                      13    38.5%    30.26    12.9%   -18.17    48.44
+In kill zone                      32    25.0%     7.63     8.3%   -34.51    42.14
+Buy-side liquidity swept          15    26.7%    10.04    17.2%   -11.06    21.10
+FVG present in zone               20    20.0%    -9.07    20.8%     0.47    -9.54
+Price at Bullish OB                4     0.0%   -58.35    22.5%     1.58   -59.94
+HTF BULLISH bias aligns with LONG signal       5     0.0%   -65.70    23.1%     4.06   -69.76
+OB+FVG confluence zone             5     0.0%   -80.26    23.1%     5.93   -86.19
+Spring tested                     10     0.0%   -77.00    26.5%    17.65   -94.65
+Discount zone                     18     5.6%   -67.03    30.8%    39.87  -106.89
+Wyckoff Accumulation Phase C — Spring confirmed      17     5.9%   -70.65    29.6%    38.19  -108.83
+Sell-side liquidity swept         22     4.5%   -67.50    36.4%    59.77  -127.27
+Wrote 44 trades to docs/superpowers/backtests/2026-07-27-fix1-htf-momentum-veto.csv

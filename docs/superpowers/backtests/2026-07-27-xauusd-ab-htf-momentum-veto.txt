@@ -1,0 +1,147 @@
+[XAU/USD] fetching candles once (frozen for both variants)...
+[XAU/USD] 3728 15m bars, 2026-05-28 08:15:00+00:00 -> 2026-07-27 08:00:00+00:00
+
+[XAU/USD] running variant A (fix ON)...
+[XAU/USD] fix ON: 13 trades in 1079.8s
+
+[XAU/USD] running variant B (fix OFF)...
+[XAU/USD] fix OFF: 13 trades in 1027.5s
+
+======================================================================
+VARIANT A — fix ON (momentum veto active)
+======================================================================
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          13
+  wins:            2
+  win rate:        15.4%
+  expectancy:      -7.19 pips
+  profit factor:   0.89
+  max drawdown:    804.00 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+XAU/USD           13     2    15.4%      -7.19     0.89     804.00
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+15min              3     1    33.3%      16.83     1.32      80.00
+1h                10     1    10.0%     -14.40     0.80     724.00
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+LONG              11     0     0.0%     -80.36     0.00     884.00
+SHORT              2     2   100.0%     395.25      inf       0.00
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+6                  6     1    16.7%     -32.25     0.52     324.00
+7                  4     1    25.0%      85.00     2.42     240.00
+8                  3     0     0.0%     -80.00     0.00     240.00
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+HTF BEARISH bias aligns with SHORT signal       1   100.0%   580.00     8.3%   -56.12   636.12
+Price at Bearish OB                1   100.0%   580.00     8.3%   -56.12   636.12
+UTAD at Bearish OB — ICT+Wyckoff confluence       1   100.0%   580.00     8.3%   -56.12   636.12
+Wyckoff Distribution Phase C — UTAD confirmed       2   100.0%   395.25     0.0%   -80.36   475.61
+UTAD tested                        1   100.0%   210.50     8.3%   -25.33   235.83
+Premium zone                       1   100.0%   210.50     8.3%   -25.33   235.83
+CHoCH confirmed on LTF             4    25.0%    84.00    11.1%   -47.72   131.72
+In kill zone                      11    18.2%     6.05     0.0%   -80.00    86.05
+FVG present in zone                7    14.3%   -39.07    16.7%    30.00   -69.07
+Price at Bullish OB                1     0.0%   -84.00    16.7%    -0.79   -83.21
+OB+FVG confluence zone             1     0.0%   -84.00    16.7%    -0.79   -83.21
+Spring tested                      6     0.0%   -80.00    28.6%    55.21  -135.21
+Discount zone                      8     0.0%   -80.00    40.0%   109.30  -189.30
+Wyckoff Accumulation Phase C — Spring confirmed      10     0.0%   -80.00    66.7%   235.50  -315.50
+Sell-side liquidity swept         10     0.0%   -80.00    66.7%   235.50  -315.50
+
+======================================================================
+VARIANT B — fix OFF (original Filter 2 behavior)
+======================================================================
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          13
+  wins:            2
+  win rate:        15.4%
+  expectancy:      -7.19 pips
+  profit factor:   0.89
+  max drawdown:    804.00 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+XAU/USD           13     2    15.4%      -7.19     0.89     804.00
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+15min              3     1    33.3%      16.83     1.32      80.00
+1h                10     1    10.0%     -14.40     0.80     724.00
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+LONG              11     0     0.0%     -80.36     0.00     884.00
+SHORT              2     2   100.0%     395.25      inf       0.00
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+6                  6     1    16.7%     -32.25     0.52     324.00
+7                  4     1    25.0%      85.00     2.42     240.00
+8                  3     0     0.0%     -80.00     0.00     240.00
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+HTF BEARISH bias aligns with SHORT signal       1   100.0%   580.00     8.3%   -56.12   636.12
+Price at Bearish OB                1   100.0%   580.00     8.3%   -56.12   636.12
+UTAD at Bearish OB — ICT+Wyckoff confluence       1   100.0%   580.00     8.3%   -56.12   636.12
+Wyckoff Distribution Phase C — UTAD confirmed       2   100.0%   395.25     0.0%   -80.36   475.61
+UTAD tested                        1   100.0%   210.50     8.3%   -25.33   235.83
+Premium zone                       1   100.0%   210.50     8.3%   -25.33   235.83
+CHoCH confirmed on LTF             4    25.0%    84.00    11.1%   -47.72   131.72
+In kill zone                      11    18.2%     6.05     0.0%   -80.00    86.05
+FVG present in zone                7    14.3%   -39.07    16.7%    30.00   -69.07
+Price at Bullish OB                1     0.0%   -84.00    16.7%    -0.79   -83.21
+OB+FVG confluence zone             1     0.0%   -84.00    16.7%    -0.79   -83.21
+Spring tested                      6     0.0%   -80.00    28.6%    55.21  -135.21
+Discount zone                      8     0.0%   -80.00    40.0%   109.30  -189.30
+Wyckoff Accumulation Phase C — Spring confirmed      10     0.0%   -80.00    66.7%   235.50  -315.50
+Sell-side liquidity swept         10     0.0%   -80.00    66.7%   235.50  -315.50
+
+======================================================================
+DIFF — trades present in fix-OFF but removed by fix-ON (vetoed)
+======================================================================
+
+======================================================================
+DIFF — trades present in fix-ON but NOT in fix-OFF (should be empty; the veto only removes, it can't create new candidates)
+======================================================================
+  (identical trade sets — veto never triggered for XAU/USD in this window)

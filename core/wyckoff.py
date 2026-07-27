@@ -24,6 +24,12 @@ RANGE_WINDOW = 20
 MIN_INSIDE_CANDLES = 12
 # How many recent candles to scan for a Spring / UTAD
 SPRING_LOOKBACK = 5
+# Minimum wick breach past the range boundary, as a fraction of range width —
+# filters out trivial 1-3% noise wicks that technically poke outside the
+# range but aren't a real stop-hunt. Evidenced by the 2026-07-27 XAU/USD
+# backtest: every failing "Spring" breached range_low by only 1.5-2.8% of
+# range width (docs/superpowers/backtests/2026-07-27-fix3-spring-tightening.md).
+MIN_BREACH_PCT = 0.03
 
 
 def identify_trading_range(df: pd.DataFrame) -> Optional[dict]:
@@ -95,9 +101,10 @@ def detect_spring(df: pd.DataFrame, trading_range: dict) -> Optional[dict]:
     """
     Detect a Wyckoff Spring in the last SPRING_LOOKBACK candles.
 
-    A Spring = a candle wicks BELOW range_low (sweeping sell-side liquidity)
-    then closes back at or above range_low within the same or next 1-2 candles.
-    This is the institutional stop hunt that precedes markup in accumulation.
+    A Spring = a candle wicks BELOW range_low by a meaningful margin (sweeping
+    sell-side liquidity, not just noise) then closes back AT OR ABOVE
+    range_low within the same or next 1-2 candles. This is the institutional
+    stop hunt that precedes markup in accumulation.
 
     Equivalent to the SMC concept of a sell-side liquidity sweep with recovery.
 
@@ -107,6 +114,8 @@ def detect_spring(df: pd.DataFrame, trading_range: dict) -> Optional[dict]:
         return None
 
     range_low = trading_range["range_low"]
+    range_high = trading_range["range_high"]
+    range_width = range_high - range_low
     recent = df.tail(SPRING_LOOKBACK)
 
     for i in range(len(recent)):
@@ -114,7 +123,8 @@ def detect_spring(df: pd.DataFrame, trading_range: dict) -> Optional[dict]:
         lo = float(row["low"])
         cl = float(row["close"])
 
-        if lo < range_low and cl >= range_low * 0.998:
+        breach = range_low - lo
+        if lo < range_low and breach >= MIN_BREACH_PCT * range_width and cl >= range_low:
             spring_low = lo
 
             # Check whether the spring low was subsequently retested on the
@@ -139,8 +149,9 @@ def detect_utad(df: pd.DataFrame, trading_range: dict) -> Optional[dict]:
     """
     Detect a Wyckoff UTAD (Upthrust After Distribution) — mirror of the Spring.
 
-    A UTAD = a candle wicks ABOVE range_high (sweeping buy-side liquidity)
-    then closes back at or below range_high. Precedes markdown in distribution.
+    A UTAD = a candle wicks ABOVE range_high by a meaningful margin (sweeping
+    buy-side liquidity, not just noise) then closes back AT OR BELOW
+    range_high. Precedes markdown in distribution.
 
     Equivalent to the SMC concept of a buy-side liquidity sweep with rejection.
 
@@ -150,6 +161,8 @@ def detect_utad(df: pd.DataFrame, trading_range: dict) -> Optional[dict]:
         return None
 
     range_high = trading_range["range_high"]
+    range_low = trading_range["range_low"]
+    range_width = range_high - range_low
     recent = df.tail(SPRING_LOOKBACK)
 
     for i in range(len(recent)):
@@ -157,7 +170,8 @@ def detect_utad(df: pd.DataFrame, trading_range: dict) -> Optional[dict]:
         hi = float(row["high"])
         cl = float(row["close"])
 
-        if hi > range_high and cl <= range_high * 1.002:
+        breach = hi - range_high
+        if hi > range_high and breach >= MIN_BREACH_PCT * range_width and cl <= range_high:
             utad_high = hi
 
             tested = False

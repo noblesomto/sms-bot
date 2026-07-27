@@ -1,0 +1,152 @@
+[NAS100] fetching candles once (frozen for both variants)...
+[NAS100] 3728 15m bars, 2026-05-28 12:30:00+00:00 -> 2026-07-27 12:15:00+00:00
+
+[NAS100] running variant A (both fixes ON)...
+[NAS100] fixed: 6 trades in 1168.8s
+
+[NAS100] running variant B (both fixes OFF / original)...
+[NAS100] original: 12 trades in 1138.9s
+
+======================================================================
+[NAS100] VARIANT A — all 3 fixes ON (current code)
+======================================================================
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          6
+  wins:            1
+  win rate:        16.7%
+  expectancy:      -16.98 pips
+  profit factor:   0.65
+  max drawdown:    237.70 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+NAS100             6     1    16.7%     -16.98     0.65     237.70
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+15min              3     1    33.3%      28.60     1.86      50.00
+1h                 3     0     0.0%     -62.57     0.00     187.70
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+LONG               1     0     0.0%     -30.90     0.00      30.90
+SHORT              5     1    20.0%     -14.20     0.72     206.80
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+6                  1     0     0.0%     -30.90     0.00      30.90
+7                  3     0     0.0%     -68.93     0.00     206.80
+8                  2     1    50.0%      67.90     3.72      50.00
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+In kill zone                       4    25.0%    13.73     0.0%   -78.40    92.13
+CHoCH confirmed on LTF             3    33.3%    28.60     0.0%   -62.57    91.17
+UTAD tested                        4    25.0%     8.95     0.0%   -68.85    77.80
+Wyckoff Distribution Phase C — UTAD confirmed       4    25.0%     8.95     0.0%   -68.85    77.80
+HTF BEARISH bias aligns with SHORT signal       3    33.3%     9.67     0.0%   -43.63    53.30
+FVG present in zone                4    25.0%    -5.25     0.0%   -40.45    35.20
+Buy-side liquidity swept           5    20.0%   -14.20     0.0%   -30.90    16.70
+Price at Bullish OB                1     0.0%   -30.90    20.0%   -14.20   -16.70
+Discount zone                      1     0.0%   -30.90    20.0%   -14.20   -16.70
+Sell-side liquidity swept          1     0.0%   -30.90    20.0%   -14.20   -16.70
+Premium zone                       2     0.0%   -78.40    25.0%    13.73   -92.13
+Price at Bearish OB                1     0.0%  -106.80    20.0%     0.98  -107.78
+OB+FVG confluence zone             1     0.0%  -106.80    20.0%     0.98  -107.78
+
+======================================================================
+[NAS100] VARIANT B — original (all 3 fixes OFF)
+======================================================================
+======================================================================
+SMC BACKTEST REPORT
+======================================================================
+Documented backtest approximations (vs. live):
+  - One evaluate() call per closed 15m bar for the "15min" scan timeframe;
+    the "1h" scan timeframe is only evaluated on hour-close bars (every 4th
+    15m bar), not on live's 5-minute scan cadence.
+  - History capped at 60 days of 15m bars per pair.
+  - No spread or slippage modeled; entries/exits use raw candle prices.
+
+Overall
+----------------------------------------
+  trades:          12
+  wins:            2
+  win rate:        16.7%
+  expectancy:      -30.27 pips
+  profit factor:   0.37
+  max drawdown:    411.60 pips
+
+By pair
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+NAS100            12     2    16.7%     -30.27     0.37     411.60
+
+By timeframe
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+15min              5     1    20.0%     -10.34     0.78     137.50
+1h                 7     1    14.3%     -44.51     0.08     311.60
+
+By direction
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+LONG               5     0     0.0%     -46.18     0.00     230.90
+SHORT              7     2    28.6%     -18.91     0.62     206.80
+
+By score
+                   n  wins     win%  exp(pips)       PF      maxDD
+------------------------------------------------------------------
+6                  4     1    25.0%     -26.20     0.20     104.80
+7                  5     0     0.0%     -68.86     0.00     344.30
+8                  3     1    33.3%      28.60     1.86     100.00
+
+Factor edge
+factor                        n_with   win% w    avg w  win% wo   avg wo     edge
+---------------------------------------------------------------------------------
+CHoCH confirmed on LTF             6    33.3%     1.98     0.0%   -62.53    64.52
+HTF BEARISH bias aligns with SHORT signal       3    33.3%     9.67    11.1%   -43.59    53.26
+Wyckoff Distribution Phase C — UTAD confirmed       6    33.3%    -4.27     0.0%   -56.28    52.02
+UTAD tested                        6    33.3%    -4.27     0.0%   -56.28    52.02
+In kill zone                       9    22.2%   -17.39     0.0%   -68.93    51.54
+Buy-side liquidity swept           5    20.0%   -14.20    14.3%   -41.76    27.56
+FVG present in zone                6    16.7%   -20.17    16.7%   -40.38    20.22
+Price at Bullish OB                1     0.0%   -30.90    18.2%   -30.22    -0.68
+Premium zone                       3    33.3%   -43.57    11.1%   -25.84   -17.72
+HTF BULLISH bias aligns with LONG signal       1     0.0%   -50.00    18.2%   -28.48   -21.52
+Discount zone                      4     0.0%   -45.23    25.0%   -22.80   -22.43
+Sell-side liquidity swept          4     0.0%   -45.23    25.0%   -22.80   -22.43
+Spring tested                      3     0.0%   -50.00    22.2%   -23.70   -26.30
+Wyckoff Accumulation Phase C — Spring confirmed       4     0.0%   -50.00    25.0%   -20.41   -29.59
+UTAD at Bearish OB — ICT+Wyckoff confluence       1     0.0%   -87.50    18.2%   -25.07   -62.43
+Price at Bearish OB                2     0.0%   -97.15    20.0%   -16.90   -80.25
+OB+FVG confluence zone             1     0.0%  -106.80    18.2%   -23.32   -83.48
+
+======================================================================
+[NAS100] DIFF — trades present in original but removed by the fixes
+======================================================================
+  REMOVED 15min  SHORT entry_ts=2026-06-10 14:15:00+00:00 outcome=SL               pnl=-87.5
+  REMOVED 15min  LONG  entry_ts=2026-06-17 12:00:00+00:00 outcome=SL               pnl=-50.0
+  REMOVED 1h     LONG  entry_ts=2026-07-07 06:00:00+00:00 outcome=SL               pnl=-50.0
+  REMOVED 1h     LONG  entry_ts=2026-07-07 07:00:00+00:00 outcome=SL               pnl=-50.0
+  REMOVED 1h     SHORT entry_ts=2026-07-14 14:00:00+00:00 outcome=SL_AFTER_TP1     pnl=26.1
+  REMOVED 1h     LONG  entry_ts=2026-07-22 08:00:00+00:00 outcome=SL               pnl=-50.0
+
+======================================================================
+[NAS100] DIFF — trades present in fixed but not in original
+======================================================================
