@@ -12,7 +12,7 @@ from db.database import SessionLocal
 from db.models import Signal, Scan
 from core.data_feed import get_candles, data_source_note
 from core.precision import price_precision
-from core.sessions import is_in_kill_zone, get_current_session, is_weekend
+from core.sessions import is_in_kill_zone, get_current_session, is_weekend, market_hours_elapsed
 from core.strategy import (
     evaluate,
     _check_rr,
@@ -356,7 +356,7 @@ async def check_signal_status():
                     expiry_hours = TF_EXPIRY_HOURS.get(sig.timeframe, 48)
                     if sig.created_at:
                         created = sig.created_at if sig.created_at.tzinfo else sig.created_at.replace(tzinfo=timezone.utc)
-                        if (now - created) > timedelta(hours=expiry_hours):
+                        if market_hours_elapsed(created, now) > expiry_hours:
                             sig.status = "EXPIRED"
                             sig.hit_target = "EXPIRED"
                             sig.hit_at = now

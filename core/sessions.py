@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, time as dtime
+from datetime import datetime, timedelta, timezone, time as dtime
 from typing import Optional
 
 # All times in UTC
@@ -30,6 +30,23 @@ def is_weekend(dt: Optional[datetime] = None) -> bool:
     if dt is None:
         dt = datetime.now(timezone.utc)
     return dt.weekday() >= 5
+
+
+def market_hours_elapsed(start: datetime, end: datetime) -> float:
+    """Hours between start and end, excluding weekend (Sat/Sun UTC) closure —
+    mirrors is_weekend()'s whole-day definition so a signal created before a
+    weekend doesn't have Sat/Sun counted against its expiry budget."""
+    if end <= start:
+        return 0.0
+    total = 0.0
+    cursor = start
+    while cursor < end:
+        day_end = datetime(cursor.year, cursor.month, cursor.day, tzinfo=cursor.tzinfo) + timedelta(days=1)
+        segment_end = min(day_end, end)
+        if not is_weekend(cursor):
+            total += (segment_end - cursor).total_seconds() / 3600
+        cursor = segment_end
+    return total
 
 
 def is_in_kill_zone(dt: Optional[datetime] = None) -> tuple:
