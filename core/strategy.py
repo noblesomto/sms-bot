@@ -34,7 +34,26 @@ logger = logging.getLogger(__name__)
 # Age = candles since the OB formed. ICT OBs remain valid much longer than
 # previously set; the tight windows (5h on 15min, 15h on 1H) were wiping out
 # all OBs and silently blocking every signal.
-_OB_MAX_AGE = {"5min": 30, "15min": 96, "1h": 72}  # 5min=2.5h, 15min=24h, 1h=3d
+#
+# Raised again 2026-07-27: the 96/72 caps (24h / 3d) were STILL discarding
+# most live OBs for slower-moving forex majors. Backtest evidence (GBP/USD,
+# USD/JPY, 60d): 62.6-89.6% of decision points had >=1 unmitigated OB, but
+# only 21.1-29.7% had one young enough to survive the cap — a real,
+# unmitigated OB just hadn't been retested yet, which per ICT theory doesn't
+# invalidate it (mitigation, checked separately in validate_obs, already
+# covers "tested and weakened"). 190 sits just under the ~199-bar natural
+# ceiling the 200-bar analysis view already imposes (an OB whose formation
+# candle scrolls out of that trailing window can never be found again
+# regardless of this cap) — so this isn't "unlimited," it's "let the age cap
+# stop double-gating on top of a limit that already exists structurally."
+# 5min left unchanged — no evidence gathered for it in this investigation.
+_OB_MAX_AGE = {"5min": 30, "15min": 190, "1h": 190}  # 5min=2.5h, 15min=~2d, 1h=~8d
+
+
+def _filter_obs_by_age(obs: list, view_len: int, max_age: int) -> list:
+    """Discard OBs older than max_age bars relative to the last bar in the
+    analysis view (view_len). See _OB_MAX_AGE."""
+    return [ob for ob in obs if (view_len - 1 - ob.get("candle_index", 0)) <= max_age]
 
 # Secondary veto for Filter 2 when the 4H swing-based trend_bias reads
 # RANGING. get_trend_bias() only looks at the last 2 confirmed swing highs/
@@ -51,6 +70,39 @@ _OB_MAX_AGE = {"5min": 30, "15min": 96, "1h": 72}  # 5min=2.5h, 15min=24h, 1h=3d
 # condition.
 _RANGING_MOMENTUM_LOOKBACK = 20   # 4H candles (~3.3 days)
 _RANGING_MOMENTUM_PCT = 0.02      # 2% net move counts as a real hidden trend
+
+# LONG-only HTF reversal guard, added on top of Filter 2 (root cause:
+# 2026-07-28 150d NAS100+US30 backtest, see docs/superpowers/backtests/
+# 2026-07-28-long-side-reversal-trace.md). get_trend_bias() needs the last
+# TWO confirmed swings to agree before flipping away from the prior trend,
+# so it lags a real reversal by design; the RANGING-momentum veto above
+# only catches a reversal once it's moved 2%+ over 20 candles — also
+# lagging. A BOS (core.structure.detect_bos) only needs ONE swing broken,
+# so it reacts sooner. Evidenced against every losing LONG in that
+# backtest: 8 of 9 fired with the HTF's last confirmed BOS already
+# BEARISH (0.3-4.5 days old) while trend_bias/the momentum veto still read
+# BULLISH/RANGING at the same moment — i.e. the LONG entry pattern (OB
+# retest / Spring / discount-zone bounce) fires early into what turns out
+# to be a fresh downtrend, not a continuation dip. Checked the symmetric
+# SHORT-side mirror (block SHORT when the last BOS is BULLISH) against the
+# same dataset: it would have blocked the single best trade in it (+421.2
+# pips) alongside some losers, netting out roughly flat — SHORT doesn't
+# show this failure mode, so this stays LONG-only rather than a general
+# symmetric filter.
+
+
+def _htf_bearish_reversal(htf_df) -> bool:
+    """Return True if the HTF's most recently confirmed structural break
+    (BOS) is BEARISH. See the constant block above for the evidence this
+    is built on and why it's LONG-only, not symmetric with SHORT.
+
+    Fails open (returns False) when there isn't enough history to judge —
+    same convention as _htf_momentum_conflicts.
+    """
+    if htf_df is None or htf_df.empty:
+        return False
+    last_bos = analyze_structure(htf_df)["last_bos"]
+    return bool(last_bos and last_bos["direction"] == "BEARISH")
 
 
 def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -> dict:
@@ -82,8 +134,8 @@ def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -
         itf_bias = analyze_structure(itf_df)["trend_bias"]
 
     obs = validate_obs(df, find_order_blocks(df, structure["bos_events"]))
-    max_ob_age = _OB_MAX_AGE.get(timeframe, 72)
-    obs = [ob for ob in obs if (len(df) - 1 - ob.get("candle_index", 0)) <= max_ob_age]
+    max_ob_age = _OB_MAX_AGE.get(timeframe, 190)
+    obs = _filter_obs_by_age(obs, len(df), max_ob_age)
 
     fvgs = update_fvg_status(df, scan_fvgs(df))
 
@@ -165,6 +217,11 @@ def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -
             logger.info(f"[{pair}/{timeframe}] Skipping {direction} — 4H bias reads RANGING "
                         f"but net momentum conflicts (missed hidden trend)")
             continue
+        if direction == "LONG" and _htf_bearish_reversal(htf_df):
+            logger.info(f"[{pair}/{timeframe}] Skipping LONG — HTF's most recent structural "
+                        f"break (BOS) is BEARISH (likely a fresh reversal, not a "
+                        f"continuation dip)")
+            continue
 
         # ── Filter 3: Intermediate TF alignment (1H for 5min/15min) ──────
         if timeframe in ("5min", "15min"):
@@ -190,10 +247,10 @@ def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -
         prec = price_precision(current_price)
         entry_low = ob_at_price["ob_low"] if ob_at_price else round(current_price * 0.999, prec)
         entry_high = ob_at_price["ob_high"] if ob_at_price else round(current_price * 1.001, prec)
-        target1, target2, invalidation = _calc_risk(direction, current_price, ob_at_price, all_levels, pair)
+        target1, target2, invalidation = _calc_risk(direction, current_price, ob_at_price, all_levels, pair, df)
 
         # ── Filter 5: Minimum 2:1 risk/reward ────────────────────────────
-        if not _check_rr(direction, current_price, target1, invalidation, min_rr=2.0):
+        if not _check_rr(direction, current_price, target1, invalidation, min_rr=_min_rr_for(pair)):
             logger.info(f"[{pair}/{timeframe}] Skipping {direction} — R:R below 2:1 "
                         f"(market={current_price} zone={entry_low}-{entry_high} t1={target1} sl={invalidation})")
             continue
@@ -342,8 +399,38 @@ def _min_sl_buffer(price: float) -> float:
     return 0.00050      # EUR/USD, GBP/USD: 5 pips
 
 
-def _max_sl_distance(pair: str, price: float) -> float:
-    """Hard cap on SL distance from entry — prevents oversized risk on wide OBs."""
+# ATR multiple for the no-OB fallback SL distance (root cause: 2026-07-28
+# NAS100 SHORT trace — 3 of NAS100's 4 recorded SHORT losses hit the old
+# fixed 50-index-point fallback while ATR(14) was 76-149 points at entry,
+# i.e. the stop was tighter (33-66% of ATR) than a single average candle's
+# range, so ordinary volatility — not a wrong directional call — stopped
+# the trade before the thesis could play out. 1.5x matches trend_bot's own
+# (independently designed) SL-vs-ATR floor for the same reason. Docs:
+# docs/superpowers/backtests/2026-07-28-nas100-short-atr-sl.md.
+_SL_ATR_MULT = 1.5
+
+
+def _current_atr(df: pd.DataFrame, period: int = 14) -> float:
+    """Current ATR(period) as of the last row in df — a tail-slice + mean,
+    same pattern as core.order_blocks._has_displacement's inline ATR (only
+    the latest value is ever needed here, not a full rolling series).
+    Returns 0.0 if there isn't enough history to compute a true range."""
+    hist = df.tail(period + 1)
+    if len(hist) < 2:
+        return 0.0
+    prev_close = hist["close"].shift(1)
+    tr = pd.concat([
+        hist["high"] - hist["low"],
+        (hist["high"] - prev_close).abs(),
+        (hist["low"] - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    return float(tr.mean())
+
+
+def _sl_distance_floor(pair: str) -> float:
+    """Per-instrument floor for the no-OB fallback SL distance — a safety
+    net for anomalously quiet/glitchy data, not the primary driver anymore
+    (see _max_sl_distance)."""
     if pair == "NAS100":  return 50.0    # 50 index points
     if pair == "US30":    return 80.0    # 80 index points
     if "XAU" in pair:     return 8.0     # $8 = 80 gold pips
@@ -352,7 +439,51 @@ def _max_sl_distance(pair: str, price: float) -> float:
     return 0.0020                        # 20 forex pips
 
 
-def _calc_risk(direction: str, price: float, ob: dict, levels: dict, pair: str = "") -> tuple:
+# Scoped to index instruments only. Testing this on all pairs (2026-07-28)
+# showed the same ATR-scaling that fixed NAS100's too-tight fallback also
+# collapsed XAU/USD's signal volume via the R:R gate (see _min_rr_for) for
+# no evidenced benefit there — only NAS100/US30 showed the underlying
+# fixed-SL-tighter-than-typical-ATR problem in the first place.
+_ATR_SCALED_PAIRS = {"NAS100", "US30"}
+
+
+def _max_sl_distance(pair: str, price: float, df: pd.DataFrame = None) -> float:
+    """No-OB fallback SL distance: max(per-instrument floor, ATR(14) * 1.5)
+    for index pairs (_ATR_SCALED_PAIRS); the pure fixed floor for everyone
+    else.
+
+    ATR-scaling keeps the stop proportional to the instrument's *current*
+    volatility instead of a flat number that can end up tighter than a
+    single average candle's range (see _SL_ATR_MULT). Falls back to the
+    fixed floor alone when df is missing/too short to compute ATR, or the
+    pair isn't ATR-scaled at all.
+    """
+    floor = _sl_distance_floor(pair)
+    if pair in _ATR_SCALED_PAIRS and df is not None and len(df) >= 2:
+        atr = _current_atr(df)
+        if atr > 0:
+            return max(floor, atr * _SL_ATR_MULT)
+    return floor
+
+
+# Lower min R:R for the same index pairs, paired with the ATR-scaled SL
+# above. Widening the SL to match real ATR also widens the risk side of
+# Filter 5's R:R check while targets (from independent liquidity levels)
+# don't move — collapsing signal volume for setups whose *nominal* R:R was
+# only ever >= 2:1 because the old SL was artificially tight. Still under
+# evaluation (2026-07-28) whether 1.5 recovers acceptable volume without
+# taking on undue risk — see docs/superpowers/backtests/2026-07-28-nas100-
+# short-atr-sl.md. Not deployed; needs backtest sign-off like any other
+# strategy parameter (spec §3.3).
+_MIN_RR_OVERRIDE = {"NAS100": 1.5, "US30": 1.5}
+
+
+def _min_rr_for(pair: str) -> float:
+    return _MIN_RR_OVERRIDE.get(pair, 2.0)
+
+
+def _calc_risk(direction: str, price: float, ob: dict, levels: dict, pair: str = "",
+               df: pd.DataFrame = None) -> tuple:
     """Derive Target 1, Target 2, and Invalidation from nearby liquidity levels.
 
     SL is placed just beyond the OB boundary (5% of OB range, min buffer per
@@ -362,7 +493,7 @@ def _calc_risk(direction: str, price: float, ob: dict, levels: dict, pair: str =
     fallback stop distance from the current price.
     """
     prec = price_precision(price)
-    max_dist = _max_sl_distance(pair, price)
+    max_dist = _max_sl_distance(pair, price, df)
 
     if direction == "LONG":
         # Pool all upside liquidity targets, sort ascending (nearest first)
