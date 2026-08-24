@@ -127,6 +127,8 @@ def _ser(s: Signal) -> dict:
         "status": s.status,
         "hit_target": s.hit_target,
         "pnl_pips": s.pnl_pips,
+        "pnl_r": s.pnl_r,
+        "htf_regime": s.htf_regime,
         "created_at": s.created_at.isoformat() if s.created_at else None,
         "alerted_at": s.alerted_at.isoformat() if s.alerted_at else None,
         "hit_at": s.hit_at.isoformat() if s.hit_at else None,

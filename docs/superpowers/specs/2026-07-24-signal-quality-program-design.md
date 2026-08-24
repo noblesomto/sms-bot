@@ -250,3 +250,25 @@ Priority tuning candidates, in order:
   `core/wyckoff.py`. Deploy verified: clean restart (0 crashes), full
   42-combo scan cycle completed without error, `/health` OK.
   **+2-week live comparison due 2026-08-10.**
+- **2026-07-28 — Fix 4 (LONG-only HTF bearish-BOS reversal guard) + Fix 5b
+  (ATR-scaled fallback SL scoped to indices, min R:R 1.5 for NAS100/US30)
+  deployed to production via scp; committed to git only on 2026-08-24**
+  (`e108541`) after the gap was found during the profitability review.
+  Evidence:
+  `docs/superpowers/backtests/2026-07-28-long-side-reversal-trace.md`,
+  `2026-07-28-nas100-short-atr-sl.md`.
+- **2026-08-24 — Profitability roadmap Phases 0–2½ implemented** (plan:
+  `docs/superpowers/plans/2026-08-24-profitability-roadmap.md`; evidence:
+  VPS DB fetched 2026-08-24 — 55 signals Jul 1–Aug 21, net −476 pips,
+  LONG −920 / SHORT +444). Changes: SHORT-only evaluation mode
+  (`ENABLE_LONG`, deploy with false), NAS100 out of recommended PAIRS,
+  R-multiple tracking (`signals.pnl_r`), expiry mark-to-close (supersedes
+  §2.3's "keep pnl_pips NULL" — expired outcomes are now counted, net of
+  spread), per-pair spread deduction at every resolution
+  (`SPREADS_JSON` overridable defaults in config.py), HTF regime tag on
+  every signal (`signals.htf_regime`), hourly kill-switch alert
+  (trailing mean ≤ −0.5R over ≥20 resolved signals). Migration is
+  additive-only; old rows keep NULL pnl_r/regime. **Next checkpoint: +4
+  weeks after the SHORT-only deploy** — compare live ledger vs the
+  +61 pips/wk SHORT-leg projection before any further tuning or LONG
+  re-enablement.

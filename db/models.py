@@ -26,6 +26,14 @@ class Signal(Base):
     hit_target = Column(String(10), nullable=True)   # TP1 | TP2 | SL
     hit_at = Column(DateTime(timezone=True), nullable=True)
     pnl_pips = Column(Float, nullable=True)          # positive = profit
+    # Profitability roadmap Phase 2 (2026-08-24): R-multiple = pnl_pips ÷ risk
+    # distance (entry→SL at alert time), normalizing index points / gold $ /
+    # forex pips into one comparable unit. NULL for rows without a stop or
+    # created before this column existed.
+    pnl_r = Column(Float, nullable=True)
+    # HTF regime label at alert time (UP/DOWN/FLAT/UNKNOWN over last 20 HTF
+    # closes ±2%) — lets later analysis test whether edges are regime-bound.
+    htf_regime = Column(String(10), nullable=True)
 
 
 class Scan(Base):

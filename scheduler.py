@@ -7,7 +7,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from config import settings
+from config import settings, get_spread_pips
 from db.database import SessionLocal
 from db.models import Signal, Scan
 from core.data_feed import get_candles, data_source_note
@@ -23,7 +23,12 @@ from core.strategy import (
     _max_sl_distance,
     _OB_MAX_AGE,
 )
-from alerts.formatter import format_signal_alert, format_tp_hit_alert, format_expiry_alert
+from alerts.formatter import (
+    format_signal_alert,
+    format_tp_hit_alert,
+    format_expiry_alert,
+    format_kill_switch_alert,
+)
 from alerts.telegram_bot import send_alert, send_tp_notification
 from charts.plotter import generate_chart, cleanup_old_charts
 
@@ -111,6 +116,7 @@ async def scan_pair_timeframe(pair: str, timeframe: str) -> dict:
                     score=sig["score"], entry_low=sig["entry_low"], entry_high=sig["entry_high"],
                     target1=sig["target1"], target2=sig["target2"], invalidation=sig["invalidation"],
                     factors=sig["factors"], entry_price=sig["entry_price"],
+                    htf_regime=analysis.get("htf_regime", "UNKNOWN"),
                 )
 
                 message = format_signal_alert(
@@ -204,10 +210,44 @@ def _calc_pips(pair: str, price_diff: float) -> float:
     return round(price_diff * 10000, 1)     # forex: 0.0001 = 1 pip
 
 
+# ── Profitability roadmap Phase 2 (2026-08-24) ────────────────────────────
+# The scoreboard previously reported gross pips in instrument-specific units,
+# and left EXPIRED rows at NULL — hiding ~25% of outcomes. Every resolution
+# now (a) deducts a per-pair spread estimate so tracked expectancy
+# approximates a real fill, and (b) records an R-multiple (pnl ÷ entry→SL
+# risk) so index points, gold dollars and forex pips become comparable.
+
+def _net_pips(pair: str, gross_pips: float) -> float:
+    """Gross pip PnL minus the per-pair spread estimate (config.get_spread_pips)."""
+    return round(gross_pips - get_spread_pips(pair), 1)
+
+
+def _pnl_r(pair: str, pnl_pips: float, entry, invalidation):
+    """R-multiple for a resolved trade: pnl_pips ÷ risk distance (entry→SL in
+    the same pip conventions as _calc_pips). Returns None when the row has no
+    usable stop (pre-cutover rows, missing invalidation) or zero risk — an R
+    of infinity is not a number worth storing."""
+    if pnl_pips is None or entry is None or invalidation is None:
+        return None
+    risk_pips = _calc_pips(pair, abs(float(entry) - float(invalidation)))
+    if risk_pips <= 0:
+        return None
+    return round(pnl_pips / risk_pips, 3)
+
+
+def _should_kill_switch(r_values: list, min_n: int, threshold: float) -> bool:
+    """Pure kill-switch decision (roadmap Phase 2½): True when at least
+    `min_n` resolved R-multiples exist AND their mean is at/below `threshold`.
+    Small samples never trip it — at n<min_n one bad trade can fake −0.5R."""
+    if len(r_values) < min_n:
+        return False
+    return (sum(r_values) / len(r_values)) <= threshold
+
+
 def _save_signal(
     pair, timeframe, direction, score,
     entry_low, entry_high, target1, target2, invalidation, factors,
-    entry_price: float,
+    entry_price: float, htf_regime: str = "UNKNOWN",
 ) -> int:
     """Persist a new signal row and return its primary key."""
     prec = price_precision(entry_low)
@@ -224,6 +264,7 @@ def _save_signal(
             factors_json=json.dumps(factors),
             status="ACTIVE",
             entry_price=round(entry_price, prec),
+            htf_regime=htf_regime,
         )
         db.add(sig)
         db.commit()
@@ -361,19 +402,26 @@ async def check_signal_status():
                             sig.hit_target = "EXPIRED"
                             sig.hit_at = now
                             resolved += 1
+                            # Roadmap Phase 2 item 4: mark expired signals to
+                            # market close (net of spread) so the scoreboard
+                            # sees 100% of outcomes. Previously pnl_pips was
+                            # left NULL here and the loss/drift was invisible.
                             df_exp = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 5)
                             cur = unrealized = None
                             if df_exp is not None and not df_exp.empty:
                                 cur = float(df_exp["close"].iloc[-1])
                                 diff = (cur - entry) if sig.direction == "LONG" else (entry - cur)
-                                unrealized = _calc_pips(sig.pair, diff)
+                                unrealized = _net_pips(sig.pair, _calc_pips(sig.pair, diff))
+                                sig.pnl_pips = unrealized
+                                sig.pnl_r = _pnl_r(sig.pair, unrealized, entry, sig.invalidation)
                             await send_tp_notification(format_expiry_alert(
                                 pair=sig.pair, direction=sig.direction,
                                 timeframe=sig.timeframe, entry=entry,
                                 current_price=cur, unrealized_pips=unrealized,
                                 expiry_hours=expiry_hours,
                             ))
-                            logger.info(f"[{sig.pair}/{sig.timeframe}] expired after {expiry_hours}h — user notified")
+                            logger.info(f"[{sig.pair}/{sig.timeframe}] expired after {expiry_hours}h "
+                                        f"at {unrealized} pips net — user notified")
                             continue
 
                 df = await asyncio.to_thread(get_candles, sig.pair, sig.timeframe, 50)
@@ -409,7 +457,8 @@ async def check_signal_status():
                 hit_target, hit_price = outcome
 
                 price_diff = (hit_price - entry) if sig.direction == "LONG" else (entry - hit_price)
-                pnl = _calc_pips(sig.pair, price_diff)
+                pnl = _net_pips(sig.pair, _calc_pips(sig.pair, price_diff))
+                risk_r = _pnl_r(sig.pair, pnl, entry, sig.invalidation)
                 resolved += 1
 
                 if hit_target == "TP1":
@@ -418,6 +467,7 @@ async def check_signal_status():
                     sig.hit_target = "TP1"
                     sig.hit_at = now
                     sig.pnl_pips = pnl
+                    sig.pnl_r = risk_r
                     msg = format_tp_hit_alert(
                         pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
                         tp_level="TP1", hit_price=hit_price, entry=entry, pnl_pips=pnl,
@@ -434,6 +484,7 @@ async def check_signal_status():
                     sig.hit_target = "TP2"
                     sig.hit_at = now
                     sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1) if came_via_tp1 else pnl
+                    sig.pnl_r = risk_r if not came_via_tp1 else _pnl_r(sig.pair, sig.pnl_pips, entry, sig.invalidation)
                     msg = format_tp_hit_alert(
                         pair=sig.pair, direction=sig.direction, timeframe=sig.timeframe,
                         tp_level="TP2", hit_price=hit_price, entry=entry, pnl_pips=pnl,
@@ -446,6 +497,7 @@ async def check_signal_status():
                     sig.hit_target = "SL"
                     sig.hit_at = now
                     sig.pnl_pips = pnl
+                    sig.pnl_r = risk_r
                     logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit @ {hit_price}")
 
                 elif hit_target == "SL_AFTER_TP1":
@@ -457,6 +509,7 @@ async def check_signal_status():
                     sig.hit_target = "SL_AFTER_TP1"
                     sig.hit_at = now
                     sig.pnl_pips = round(0.5 * sig.pnl_pips + 0.5 * pnl, 1)
+                    sig.pnl_r = _pnl_r(sig.pair, sig.pnl_pips, entry, sig.invalidation)
                     logger.info(f"[{sig.pair}/{sig.timeframe}] SL hit after TP1 — partial win banked")
 
             except Exception as e:
@@ -481,6 +534,53 @@ async def daily_cleanup():
     logger.info(f"[{datetime.now(timezone.utc)}] Daily cleanup: {deleted} stale chart file(s) removed")
 
 
+# Re-alert throttle for the kill switch — once tripped, re-firing hourly
+# would just train the user to ignore it. One nudge per week is enough.
+_KILLSWITCH_REALERT_DAYS = 7
+_killswitch_last_alert: datetime | None = None
+
+
+async def check_kill_switch():
+    """Hourly circuit-breaker check (roadmap Phase 2½).
+
+    With at least KILL_SWITCH_MIN_N resolved R-multiples on file, a trailing
+    mean over the last KILL_SWITCH_LOOKBACK resolved signals at/below
+    KILL_SWITCH_R fires a Telegram alert. Informational only — it never
+    stops scanning; pausing stays a human decision.
+    """
+    global _killswitch_last_alert
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(Signal.pnl_r)
+            .filter(Signal.pnl_r.isnot(None))
+            .order_by(Signal.hit_at.desc(), Signal.id.desc())
+            .limit(settings.KILL_SWITCH_LOOKBACK)
+            .all()
+        )
+    finally:
+        db.close()
+
+    r_values = [row[0] for row in rows if row[0] is not None]
+    if not _should_kill_switch(r_values, settings.KILL_SWITCH_MIN_N, settings.KILL_SWITCH_R):
+        return
+
+    now = datetime.now(timezone.utc)
+    if (_killswitch_last_alert is not None
+            and (now - _killswitch_last_alert).days < _KILLSWITCH_REALERT_DAYS):
+        return
+
+    mean_r = sum(r_values) / len(r_values)
+    logger.critical(
+        f"KILL SWITCH: trailing {len(r_values)} resolved signals average "
+        f"{mean_r:+.2f}R (threshold {settings.KILL_SWITCH_R}R)"
+    )
+    await send_tp_notification(format_kill_switch_alert(
+        n=len(r_values), mean_r=round(mean_r, 2), threshold=settings.KILL_SWITCH_R,
+    ))
+    _killswitch_last_alert = now
+
+
 def setup_scheduler() -> AsyncIOScheduler:
     """Register all jobs and return the configured scheduler (not yet started)."""
     scheduler.add_job(
@@ -494,6 +594,12 @@ def setup_scheduler() -> AsyncIOScheduler:
         check_signal_status,
         trigger=IntervalTrigger(hours=1),
         id="signal_status_check",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        check_kill_switch,
+        trigger=IntervalTrigger(hours=1),
+        id="kill_switch_check",
         replace_existing=True,
     )
     scheduler.add_job(

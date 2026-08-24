@@ -36,6 +36,8 @@ def _migrate_db():
         ("signals", "hit_target", "VARCHAR(10)"),
         ("signals", "hit_at", "DATETIME"),
         ("signals", "pnl_pips", "FLOAT"),
+        ("signals", "pnl_r", "FLOAT"),
+        ("signals", "htf_regime", "VARCHAR(10)"),
     ]
     with engine.connect() as conn:
         for table, col, col_type in new_cols:

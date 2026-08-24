@@ -126,6 +126,27 @@ def format_expiry_alert(pair, direction, timeframe, entry,
     ])
 
 
+def format_kill_switch_alert(n: int, mean_r: float, threshold: float,
+                             lookback_days: int = 14) -> str:
+    """Circuit-breaker alert (roadmap Phase 2½): the trailing resolved-signal
+    expectancy has fallen to/below the kill threshold. Informational — it
+    does not stop scanning, but demands a human decision."""
+    return "\n".join([
+        "🛑 KILL-SWITCH ALERT — SMC Bot",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "",
+        f"Trailing {n} resolved signals averaging {mean_r:+.2f}R "
+        f"(threshold: {threshold}R)",
+        "",
+        "Expectancy has gone materially negative. Review recent signals in",
+        "/dashboard, consider pausing scanning or tightening filters before",
+        "the next trades are taken.",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+    ])
+
+
 def test_formatter():
     """Standalone test — prints the formatted alert for a sample LONG signal."""
     msg = format_signal_alert(

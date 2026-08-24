@@ -105,6 +105,49 @@ def _htf_bearish_reversal(htf_df) -> bool:
     return bool(last_bos and last_bos["direction"] == "BEARISH")
 
 
+# ── Profitability roadmap Phase 1 (2026-08-24) ────────────────────────────
+# Live ledger Jul 1–Aug 21 (VPS DB): LONG = 3 wins / 26 trades / −920 pips;
+# SHORT = +444 pips. Every shipped mechanical LONG guard reduced but never
+# eliminated the bleed, so the roadmap moves LONG behind an explicit opt-in
+# switch for an evaluation period instead of stacking yet another filter.
+def _direction_allowed(direction: str) -> bool:
+    """Return False when direction is disabled by settings.ENABLE_LONG.
+
+    SHORT-only evaluation mode: with ENABLE_LONG=false, LONG candidates are
+    dropped before scoring so nothing downstream (confluence, filters,
+    alerts) ever sees them.
+    """
+    if direction == "LONG" and not settings.ENABLE_LONG:
+        return False
+    return True
+
+
+# Regime tag stored on every signal row (Phase 2 item 6): lets later
+# analysis answer "was the SHORT edge real or just the Jul–Aug tape?"
+# without re-deriving candles. Same ±2%-over-20-closes spirit as Fix1's
+# momentum veto — deliberately coarse; this is a label, not a filter.
+_REGIME_LOOKBACK = 20
+_REGIME_THRESHOLD_PCT = 0.02
+
+
+def _htf_regime_of(htf_df) -> str:
+    """Classify the HTF view as UP/DOWN/FLAT over the last _REGIME_LOOKBACK
+    closes (±_REGIME_THRESHOLD_PCT), or UNKNOWN without enough history."""
+    if htf_df is None or len(htf_df) < 2:
+        return "UNKNOWN"
+    window = htf_df.tail(_REGIME_LOOKBACK + 1)
+    start = float(window["close"].iloc[0])
+    end = float(window["close"].iloc[-1])
+    if start <= 0:
+        return "UNKNOWN"
+    pct = (end - start) / start
+    if pct >= _REGIME_THRESHOLD_PCT:
+        return "UP"
+    if pct <= -_REGIME_THRESHOLD_PCT:
+        return "DOWN"
+    return "FLAT"
+
+
 def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -> dict:
     """Run structure/confluence analysis and the signal-decision filters.
 
@@ -166,6 +209,7 @@ def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -
     analysis = {
         "obs": obs, "fvgs": fvgs, "all_levels": all_levels,
         "structure": structure, "wyckoff_ctx": wyckoff_ctx, "df": df,
+        "htf_regime": _htf_regime_of(htf_df),
     }
 
     # Determine candidate signal directions
@@ -176,6 +220,10 @@ def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -
         candidates.append("LONG")
     elif structure["trend_bias"] == "BEARISH":
         candidates.append("SHORT")
+
+    # Phase 1 roadmap gate: drop disabled directions before any scoring so
+    # neither the confluence log nor downstream filters see them.
+    candidates = [d for d in candidates if _direction_allowed(d)]
 
     if not candidates:
         logger.debug(f"[{pair}/{timeframe}] No signal candidate — price not at any OB, "
