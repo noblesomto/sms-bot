@@ -9,7 +9,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from config import settings, get_spread_pips
 from db.database import SessionLocal
-from db.models import Signal, Scan
+from db.models import Signal, Scan, BotState
 from core.data_feed import get_candles, data_source_note
 from core.precision import price_precision
 from core.sessions import is_in_kill_zone, get_current_session, is_weekend, market_hours_elapsed
@@ -536,8 +536,44 @@ async def daily_cleanup():
 
 # Re-alert throttle for the kill switch — once tripped, re-firing hourly
 # would just train the user to ignore it. One nudge per week is enough.
+# Persisted via BotState (not a module global) so a routine deploy/restart
+# doesn't reset the throttle and cause a duplicate alert mid-cooldown.
 _KILLSWITCH_REALERT_DAYS = 7
-_killswitch_last_alert: datetime | None = None
+_KILLSWITCH_STATE_KEY = "killswitch_last_alert"
+
+# Kill-switch trailing window must be actual closed outcomes only. TP1_HIT
+# carries an interim pnl_r (scheduler.py's TP1 branch) that later gets
+# overwritten on TP2/SL_AFTER_TP1 — counting it here would let a still-open
+# trade's temporary R mask (or falsely trigger) the circuit breaker.
+_RESOLVED_STATUSES = ("HIT", "INVALIDATED", "PARTIAL_WIN", "EXPIRED")
+
+
+def _load_killswitch_last_alert(db) -> datetime | None:
+    row = db.query(BotState).filter_by(key=_KILLSWITCH_STATE_KEY).first()
+    if row and row.value:
+        return datetime.fromisoformat(row.value)
+    return None
+
+
+def _save_killswitch_last_alert(db, ts: datetime) -> None:
+    row = db.query(BotState).filter_by(key=_KILLSWITCH_STATE_KEY).first()
+    if row:
+        row.value = ts.isoformat()
+    else:
+        db.add(BotState(key=_KILLSWITCH_STATE_KEY, value=ts.isoformat()))
+    db.commit()
+
+
+def _fetch_resolved_r_values(db, limit: int) -> list:
+    """Trailing R-multiples for closed signals only (see _RESOLVED_STATUSES)."""
+    rows = (
+        db.query(Signal.pnl_r)
+        .filter(Signal.pnl_r.isnot(None), Signal.status.in_(_RESOLVED_STATUSES))
+        .order_by(Signal.hit_at.desc(), Signal.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return [row[0] for row in rows if row[0] is not None]
 
 
 async def check_kill_switch():
@@ -548,37 +584,28 @@ async def check_kill_switch():
     KILL_SWITCH_R fires a Telegram alert. Informational only — it never
     stops scanning; pausing stays a human decision.
     """
-    global _killswitch_last_alert
     db = SessionLocal()
     try:
-        rows = (
-            db.query(Signal.pnl_r)
-            .filter(Signal.pnl_r.isnot(None))
-            .order_by(Signal.hit_at.desc(), Signal.id.desc())
-            .limit(settings.KILL_SWITCH_LOOKBACK)
-            .all()
+        r_values = _fetch_resolved_r_values(db, settings.KILL_SWITCH_LOOKBACK)
+        if not _should_kill_switch(r_values, settings.KILL_SWITCH_MIN_N, settings.KILL_SWITCH_R):
+            return
+
+        now = datetime.now(timezone.utc)
+        last_alert = _load_killswitch_last_alert(db)
+        if last_alert is not None and (now - last_alert).days < _KILLSWITCH_REALERT_DAYS:
+            return
+
+        mean_r = sum(r_values) / len(r_values)
+        logger.critical(
+            f"KILL SWITCH: trailing {len(r_values)} resolved signals average "
+            f"{mean_r:+.2f}R (threshold {settings.KILL_SWITCH_R}R)"
         )
+        await send_tp_notification(format_kill_switch_alert(
+            n=len(r_values), mean_r=round(mean_r, 2), threshold=settings.KILL_SWITCH_R,
+        ))
+        _save_killswitch_last_alert(db, now)
     finally:
         db.close()
-
-    r_values = [row[0] for row in rows if row[0] is not None]
-    if not _should_kill_switch(r_values, settings.KILL_SWITCH_MIN_N, settings.KILL_SWITCH_R):
-        return
-
-    now = datetime.now(timezone.utc)
-    if (_killswitch_last_alert is not None
-            and (now - _killswitch_last_alert).days < _KILLSWITCH_REALERT_DAYS):
-        return
-
-    mean_r = sum(r_values) / len(r_values)
-    logger.critical(
-        f"KILL SWITCH: trailing {len(r_values)} resolved signals average "
-        f"{mean_r:+.2f}R (threshold {settings.KILL_SWITCH_R}R)"
-    )
-    await send_tp_notification(format_kill_switch_alert(
-        n=len(r_values), mean_r=round(mean_r, 2), threshold=settings.KILL_SWITCH_R,
-    ))
-    _killswitch_last_alert = now
 
 
 def setup_scheduler() -> AsyncIOScheduler:

@@ -36,6 +36,16 @@ class Signal(Base):
     htf_regime = Column(String(10), nullable=True)
 
 
+class BotState(Base):
+    """Tiny key/value store for scheduler state that must survive process
+    restarts (e.g. the kill-switch re-alert timestamp — a plain module
+    global resets on every deploy, defeating the throttle)."""
+    __tablename__ = "bot_state"
+
+    key = Column(String(50), primary_key=True)
+    value = Column(String(200), nullable=True)
+
+
 class Scan(Base):
     __tablename__ = "scans"
 

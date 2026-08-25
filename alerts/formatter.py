@@ -126,8 +126,7 @@ def format_expiry_alert(pair, direction, timeframe, entry,
     ])
 
 
-def format_kill_switch_alert(n: int, mean_r: float, threshold: float,
-                             lookback_days: int = 14) -> str:
+def format_kill_switch_alert(n: int, mean_r: float, threshold: float) -> str:
     """Circuit-breaker alert (roadmap Phase 2½): the trailing resolved-signal
     expectancy has fallen to/below the kill threshold. Informational — it
     does not stop scanning, but demands a human decision."""

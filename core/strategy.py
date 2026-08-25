@@ -223,11 +223,16 @@ def evaluate(pair: str, timeframe: str, df: pd.DataFrame, htf_df, itf_df, now) -
 
     # Phase 1 roadmap gate: drop disabled directions before any scoring so
     # neither the confluence log nor downstream filters see them.
+    pre_gate_candidates = candidates
     candidates = [d for d in candidates if _direction_allowed(d)]
 
     if not candidates:
-        logger.debug(f"[{pair}/{timeframe}] No signal candidate — price not at any OB, "
-                     f"trend={structure['trend_bias']}, OBs={len(obs)}")
+        if pre_gate_candidates:
+            logger.debug(f"[{pair}/{timeframe}] Candidate(s) {pre_gate_candidates} dropped "
+                         f"by ENABLE_LONG gate")
+        else:
+            logger.debug(f"[{pair}/{timeframe}] No signal candidate — price not at any OB, "
+                         f"trend={structure['trend_bias']}, OBs={len(obs)}")
 
     for direction in candidates:
         conf = score_signal(

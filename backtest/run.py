@@ -89,7 +89,9 @@ def main(argv=None) -> int:
     timeframes = _parse_timeframes(args.timeframes)
 
     print(f"Backtesting {len(pairs)} pair(s): {', '.join(pairs)} "
-          f"| timeframes={list(timeframes)} | days={args.days}", flush=True)
+          f"| timeframes={list(timeframes)} | days={args.days} "
+          f"| ENABLE_LONG={settings.ENABLE_LONG} (from env — LONG candidates "
+          f"are silently dropped in evaluate() when False)", flush=True)
 
     all_trades = []
     for pair in pairs:

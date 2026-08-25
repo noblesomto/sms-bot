@@ -7,6 +7,14 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_enable_long(raw: str) -> bool:
+    """Allow-list, not deny-list: an unrecognized value (typo, "off", blank)
+    must fail toward disabling LONG, since that's the safer state the
+    profitability roadmap is trying to reach — not silently fail toward the
+    documented bleed."""
+    return raw.strip().lower() in ("true", "1", "yes")
+
 # Conservative per-pair spread estimates in the bot's own pip conventions
 # (see scheduler._calc_pips): forex 0.0001 = 1 pip, JPY 0.01 = 1 pip,
 # metals $0.10 = 1 pip, indices 1 point = 1 pip. Deducted from gross PnL at
@@ -31,7 +39,7 @@ class Settings:
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
     SCAN_INTERVAL_MINUTES: int = int(os.getenv("SCAN_INTERVAL_MINUTES", "15"))
-    PAIRS: list = os.getenv("PAIRS", "XAUUSD,EURUSD,GBPUSD,USDJPY").split(",")
+    PAIRS: list = os.getenv("PAIRS", "XAU/USD,EUR/USD,GBP/USD,USD/JPY").split(",")
     TIMEFRAMES: list = os.getenv("TIMEFRAMES", "1h,4h,1day").split(",")
     HTF_TIMEFRAME: str = os.getenv("HTF_TIMEFRAME", "1day")
     LTF_TIMEFRAME: str = os.getenv("LTF_TIMEFRAME", "1h")
@@ -43,8 +51,7 @@ class Settings:
     # Jul 1–Aug 21 showed LONG at 3 wins / 26 trades / −920 pips while SHORT
     # carried +444 pips. Default true so this only changes behavior when a
     # deployment explicitly opts in.
-    ENABLE_LONG: bool = os.getenv("ENABLE_LONG", "true").strip().lower() \
-        not in ("false", "0", "no")
+    ENABLE_LONG: bool = _parse_enable_long(os.getenv("ENABLE_LONG", "true"))
     # Kill-switch thresholds (Phase 2½): alert when trailing mean R over the
     # last N resolved signals ≤ KILL_SWITCH_R, with at least KILL_SWITCH_MIN_N
     # resolved signals on file to avoid small-sample false alarms.

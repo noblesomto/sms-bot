@@ -5,12 +5,19 @@
 - Spread-netted PnL and R-multiple bookkeeping (_net_pips / _pnl_r)
 - Kill-switch decision rule (_should_kill_switch)
 """
+from datetime import datetime, timedelta, timezone
+
 import pandas as pd
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
-from config import get_spread_pips, settings
+from config import _parse_enable_long, get_spread_pips, settings
 from alerts.formatter import format_kill_switch_alert
 from core.strategy import _direction_allowed, _htf_regime_of
+from db.database import Base
+from db.models import Signal, BotState
+import scheduler
 from scheduler import _net_pips, _pnl_r, _should_kill_switch
 
 
@@ -31,6 +38,20 @@ def test_direction_allowed_keeps_both_when_enabled(monkeypatch):
     monkeypatch.setattr(settings, "ENABLE_LONG", True)
     assert _direction_allowed("LONG")
     assert _direction_allowed("SHORT")
+
+
+def test_parse_enable_long_accepts_known_true_values():
+    for val in ("true", "True", " TRUE ", "1", "yes", "YES"):
+        assert _parse_enable_long(val) is True
+
+
+def test_parse_enable_long_fails_closed_on_unrecognized_values():
+    # An unrecognized ENABLE_LONG value must disable LONG, not silently
+    # leave it enabled — the whole point of this switch is to stop the
+    # documented LONG bleed, so ambiguous input must fail toward the safer
+    # (disabled) state rather than toward the bleed.
+    for val in ("false", "0", "no", "off", "disabled", "", "  ", "banana"):
+        assert _parse_enable_long(val) is False
 
 
 # ── Phase 2 item 6: HTF regime tag ───────────────────────────────────────
@@ -111,7 +132,6 @@ def test_kill_switch_never_trips_below_minimum_sample():
 
 
 def test_kill_switch_fires_when_mean_at_threshold():
-    r_values = [-1.0] * 10 + [0.5] * 10          # mean exactly −0.25R… adjust to boundary
     r_values = [-1.0] * 15 + [0.5] * 5           # mean = −0.5R exactly
     assert _should_kill_switch(r_values, min_n=20, threshold=-0.5)
 
@@ -129,3 +149,60 @@ def test_kill_switch_stays_silent_when_expectancy_positive():
 def test_kill_switch_alert_message_contains_numbers():
     msg = format_kill_switch_alert(n=30, mean_r=-0.62, threshold=-0.5)
     assert "-0.62" in msg and "30" in msg
+
+
+# ── Phase 2½ fixes: persisted re-alert throttle + resolved-only window ──
+
+def _memory_db():
+    """A fresh in-memory SQLite session bound to the full app schema."""
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(bind=engine)
+    return sessionmaker(bind=engine)()
+
+
+def test_killswitch_last_alert_persists_across_load_calls():
+    # A plain module global resets on every process restart, defeating the
+    # 7-day re-alert throttle — it must be readable back via a fresh query,
+    # not just an in-memory variable.
+    db = _memory_db()
+    assert scheduler._load_killswitch_last_alert(db) is None
+
+    now = datetime.now(timezone.utc)
+    scheduler._save_killswitch_last_alert(db, now)
+    assert scheduler._load_killswitch_last_alert(db) == now
+
+    # A second save (re-alert cadence check running again) must update the
+    # same row, not accumulate duplicates.
+    later = now + timedelta(days=8)
+    scheduler._save_killswitch_last_alert(db, later)
+    assert scheduler._load_killswitch_last_alert(db) == later
+    assert db.query(BotState).count() == 1
+    db.close()
+
+
+def _make_signal(status: str, pnl_r: float) -> Signal:
+    return Signal(
+        pair="EUR/USD", timeframe="1h", direction="SHORT", confluence_score=5,
+        entry_zone_high=1.1, entry_zone_low=1.09, status=status, pnl_r=pnl_r,
+    )
+
+
+def test_resolved_r_values_excludes_still_open_tp1_hit():
+    # TP1_HIT carries an interim pnl_r that can still change (blended on
+    # TP2/SL_AFTER_TP1) — the kill switch must only average truly closed
+    # outcomes, or a batch of still-open partial wins can mask a real drop
+    # in expectancy.
+    db = _memory_db()
+    db.add_all([
+        _make_signal("HIT", 1.0),
+        _make_signal("INVALIDATED", -1.0),
+        _make_signal("PARTIAL_WIN", 0.3),
+        _make_signal("EXPIRED", -0.2),
+        _make_signal("TP1_HIT", 0.5),   # still open — must be excluded
+        _make_signal("ACTIVE", None),   # no pnl_r yet
+    ])
+    db.commit()
+
+    r_values = scheduler._fetch_resolved_r_values(db, limit=30)
+    assert sorted(r_values) == sorted([1.0, -1.0, 0.3, -0.2])
+    db.close()
